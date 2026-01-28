@@ -23,7 +23,7 @@
 #include <mrpt/core/initializer.h>
 #include <mrpt/rtti/CObject.h>
 
-MRPT_INITIALIZER(do_register_mola_mapper_2d)
+MRPT_INITIALIZER(do_register_mola_mapper_2d)  // NOLINT
 {
   using mrpt::rtti::registerClass;
 

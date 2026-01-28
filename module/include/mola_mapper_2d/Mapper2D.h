@@ -20,12 +20,8 @@
  */
 #pragma once
 
-#include <mp2p_icp/ICP.h>
-#include <mp2p_icp/Parameters.h>
-#include <mp2p_icp_filters/FilterBase.h>
-#include <mp2p_icp_filters/Generator.h>
+// MRPT
 #include <mrpt/containers/bimap.h>
-#include <mrpt/core/pimpl.h>
 #include <mrpt/graphs/CDirectedGraph.h>
 #include <mrpt/graphs/dijkstra.h>
 #include <mrpt/maps/CMetricMap.h>
@@ -40,13 +36,21 @@
 #include <mrpt/system/COutputLogger.h>
 #include <mrpt/system/CTimeLogger.h>
 
+// MP2P_ICP
+#include <mp2p_icp/ICP.h>
+#include <mp2p_icp/Parameters.h>
+#include <mp2p_icp_filters/FilterBase.h>
+#include <mp2p_icp_filters/Generator.h>
+
+// MOLA
+#include <mola_kernel/interfaces/FrontEndBase.h>
+
+// GTSAM:
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+
+// STD
 #include <mutex>
 #include <optional>
-
-namespace gtsam
-{
-class NonlinearFactorGraph;
-}
 
 namespace mola
 {
@@ -71,11 +75,6 @@ class SlamMapperState
 {
 public:
   SlamMapperState();
-  ~SlamMapperState() = default;
-
-  // Prevent copying
-  SlamMapperState(const SlamMapperState &) = delete;
-  SlamMapperState & operator=(const SlamMapperState &) = delete;
 
   /** @name Configuration from YAML files
 	 *  @{ */
@@ -87,11 +86,15 @@ public:
 	 *  @{ */
 
   // PIMPL to gtsam types to avoid requiring gtsam headers in client code
-  struct Impl;
-  mrpt::pimpl<Impl> gtsam_data;
+  struct Impl
+  {
+    gtsam::Values graph_values;
+    gtsam::NonlinearFactorGraph graph_factors;
+  };
+  Impl gtsam_data;
 
   // Mapping: timestamp <-> keyframe ID
-  mrpt::containers::bimap<mrpt::Clock::time_point, KeyFrameID> time2kfid;
+  mrpt::containers::bimap<mrpt::Clock::time_point, KeyFrameID> time_to_kf_id;
 
   // Raw observations for each keyframe
   std::map<KeyFrameID, mrpt::obs::CSensoryFrame> keyframe_observations;
@@ -124,18 +127,18 @@ public:
 	 *  @{ */
 
   void clear() { *this = SlamMapperState(); }
-  bool empty() const { return time2kfid.empty(); }
+  bool empty() const { return time_to_kf_id.empty(); }
 
   void serialize_to(mrpt::serialization::CArchive & out) const;
   void serialize_from(mrpt::serialization::CArchive & in);
 
   KeyFrameID last_kf_id() const
   {
-    ASSERT_(!time2kfid.empty());
-    return time2kfid.getInverseMap().rbegin()->first;
+    ASSERT_(!time_to_kf_id.empty());
+    return time_to_kf_id.getInverseMap().rbegin()->first;
   }
 
-  KeyFrameID generate_new_kf_id() const { return time2kfid.empty() ? 0 : last_kf_id() + 1; }
+  KeyFrameID generate_new_kf_id() const { return time_to_kf_id.empty() ? 0 : last_kf_id() + 1; }
 
   void delete_keyframe(KeyFrameID kf_id);
 
@@ -163,7 +166,7 @@ public:
 
   // Returns all keyframes within a topological distance from a given keyframe
   std::set<KeyFrameID> get_keyframes_in_topological_radius(
-    KeyFrameID id, size_t max_topo_distance = 0) const;
+    KeyFrameID id, size_t max_topological_distance = 0) const;
 
   /** @} */
 };
@@ -182,7 +185,7 @@ public:
  * - Receives observations via processActionObservation()
  * - Publishes optimized maps via getCurrentBestMap()
  */
-class Mapper2D : public mrpt::system::COutputLogger
+class Mapper2D : public mola::FrontEndBase
 {
 public:
   Mapper2D();
@@ -197,24 +200,14 @@ public:
   /** @name Main API
 	 * @{ */
 
+protected:
   /**
 	 * Initialize from YAML configuration file.
-	 * 
-	 * Expected structure:
-	 * ```yaml
-	 * max_dist_to_search_for_icp_edges: 3.0
-	 * min_icp_quality_odom: 0.30
-	 * min_icp_quality_loop_closure: 0.60
-	 * # ... other parameters
-	 * icp-lidar-odometry:
-	 *   # ICP pipeline configuration
-	 * icp-lidar-loop-closure:
-	 *   # ICP pipeline configuration
-	 * sensor_labels_for_simplemap: ["lidar"]
-	 * ```
+	 * Expected structure: see package example YAML files.
 	 */
-  void initialize(const std::string & yaml_config_file);
+  void initialize_frontend(const Yaml & cfg) override;
 
+public:
   /**
 	 * Main entry point for SLAM processing.
 	 * 
@@ -272,7 +265,7 @@ private:
   struct NearbyKeyFramesOutput
   {
     std::map<double, KeyFrameID> distance_to_kf_ids;  // sorted by distance
-    std::set<KeyFrameID> kfs_in_topo_ball;
+    std::set<KeyFrameID> kfs_in_topological_ball;
   };
 
   struct ICPEdgesOutput

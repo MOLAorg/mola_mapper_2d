@@ -19,18 +19,10 @@
  * @date   Jan 23, 2026
  */
 
-#include <gtsam/geometry/Point3.h>
-#include <gtsam/geometry/Pose3.h>
-#include <gtsam/inference/Symbol.h>
-#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
-#include <gtsam/nonlinear/NonlinearFactorGraph.h>
-#include <gtsam/nonlinear/Values.h>
-#include <gtsam/slam/BetweenFactor.h>
-#include <gtsam/slam/PriorFactor.h>
-#include <gtsam2mrpt_serial/serialize.h>
-#include <mola-yaml/yaml_helpers.h>
+// This package:
 #include <mola_mapper_2d/Mapper2D.h>
-#include <mp2p_icp/icp_pipeline_from_yaml.h>
+
+// MRPT:
 #include <mrpt/core/lock_helper.h>
 #include <mrpt/maps/CSimplePointsMap.h>
 #include <mrpt/math/CQuaternion.h>
@@ -42,11 +34,30 @@
 #include <mrpt/opengl/COpenGLScene.h>
 #include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/opengl/stock_objects.h>
+#include <mrpt/poses/gtsam_wrappers.h>
 #include <mrpt/serialization/bimap_serialization.h>
 #include <mrpt/serialization/stl_serialization.h>
 #include <mrpt/system/filesystem.h>
 #include <mrpt/version.h>
 
+// GTSAM:
+#include <gtsam/geometry/Point3.h>
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/inference/Symbol.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/Values.h>
+#include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/PriorFactor.h>
+
+// MOLA / MP2P_ICP
+#include <mola_yaml/yaml_helpers.h>
+#include <mp2p_icp/icp_pipeline_from_yaml.h>
+
+// Other libs:
+#include <gtsam2mrpt_serial/serialize.h>
+
+// STD
 #include <random>
 
 namespace mola
@@ -55,20 +66,15 @@ namespace mola
 // SlamMapperState Implementation
 // ============================================================================
 
-struct SlamMapperState::Impl
-{
-  gtsam::Values graph_values;
-  gtsam::NonlinearFactorGraph graph_factors;
-};
-
-SlamMapperState::SlamMapperState() : gtsam_data(mrpt::make_impl<SlamMapperState::Impl>()) {}
+SlamMapperState::SlamMapperState()  // gtsam_data(mrpt::make_impl<SlamMapperState::Impl>()) {}
+  = default;
 
 void SlamMapperState::delete_keyframe(KeyFrameID kf_id)
 {
   using gtsam::symbol_shorthand::X;
 
-  time2kfid.erase_by_value(kf_id);
-  gtsam_data->graph_values.erase(X(kf_id));
+  time_to_kf_id.erase_by_value(kf_id);
+  gtsam_data.graph_values.erase(X(kf_id));
   keyframe_observations.erase(kf_id);
   cached_keyframe_maps.erase(kf_id);
 }
@@ -80,7 +86,7 @@ mrpt::maps::CSimpleMap SlamMapperState::as_simple_map() const
   const auto pose_cov = mrpt::math::CMatrixDouble66::Identity();
   mrpt::maps::CSimpleMap sm;
 
-  for (const auto & kv : gtsam_data->graph_values) {
+  for (const auto & kv : gtsam_data.graph_values) {
     const auto key = kv.key;
     const auto pose =
       mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(kv.value.cast<gtsam::Pose3>()));
@@ -106,7 +112,9 @@ mrpt::maps::CSimpleMap SlamMapperState::as_simple_map_around_pose(
 
   for (const auto & e : sm_all) {
     const double d = e.pose->getMeanVal().distanceTo(pose);
-    if (d > distance_meters) continue;
+    if (d > distance_meters) {
+      continue;
+    }
     sm.insert(e.pose, e.sf);
   }
 
@@ -139,7 +147,7 @@ mp2p_icp::metric_map_t::Ptr SlamMapperState::build_metric_map_from_observations(
 }
 
 std::set<KeyFrameID> SlamMapperState::get_keyframes_in_topological_radius(
-  KeyFrameID id, size_t max_topo_distance) const
+  KeyFrameID id, size_t max_topological_distance) const
 {
   if (const auto it = cached_nearby_kfs.find(id); it != cached_nearby_kfs.end()) {
     return it->second;
@@ -147,13 +155,12 @@ std::set<KeyFrameID> SlamMapperState::get_keyframes_in_topological_radius(
 
   std::set<KeyFrameID> nodes;
 
-  if (kf_connectivity.edges.empty()) return {};
+  if (kf_connectivity.edges.empty()) {
+    return {};
+  }
 
-#if MRPT_VERSION >= 0x241
-  const KeyFrameConnectivityDijkstra dijkstra(kf_connectivity, id, {}, {}, max_topo_distance);
-#else
-  const KeyFrameConnectivityDijkstra dijkstra(kf_connectivity, id, {}, {});
-#endif
+  const KeyFrameConnectivityDijkstra dijkstra(
+    kf_connectivity, id, {}, {}, max_topological_distance);
 
   const auto & tree = dijkstra.getTreeGraph();
   for (const auto & edges : tree.edges_to_children) {
@@ -180,7 +187,9 @@ void SlamMapperState::add_kf_connectivity_from_factor_graph(const gtsam::Nonline
   for (const auto & f : fg) {
     const auto * between_factor = dynamic_cast<const gtsam::BetweenFactor<gtsam::Pose3> *>(f.get());
 
-    if (!between_factor) continue;
+    if (between_factor == nullptr) {
+      continue;
+    }
 
     const auto key1 = gtsam::Symbol(between_factor->key1());
     const auto key2 = gtsam::Symbol(between_factor->key2());
@@ -195,10 +204,10 @@ void SlamMapperState::serialize_to(mrpt::serialization::CArchive & out) const
 {
   using namespace gtsam2mrpt_serial;
 
-  const uint8_t SERIALIZATION_VERSION = 2;
+  const uint8_t SERIALIZATION_VERSION = 0;
   out << SERIALIZATION_VERSION;
-  out << time2kfid << keyframe_observations << accum_odom_since_last_kf;
-  out << gtsam_data->graph_factors << gtsam_data->graph_values;
+  out << time_to_kf_id << keyframe_observations << accum_odom_since_last_kf;
+  out << gtsam_data.graph_factors << gtsam_data.graph_values;
 }
 
 void SlamMapperState::serialize_from(mrpt::serialization::CArchive & in)
@@ -214,33 +223,9 @@ void SlamMapperState::serialize_from(mrpt::serialization::CArchive & in)
 
   switch (version) {
     case 0:
-    case 1:
-    case 2:
-      in >> time2kfid >> keyframe_observations;
-
-      if (version == 0) {
-        mrpt::poses::CPose3D p;
-        in >> p;
-        accum_odom_since_last_kf.mean = mrpt::poses::CPose2D(p);
-        accum_odom_since_last_kf.cov.setZero();
-      } else {
-        in >> accum_odom_since_last_kf;
-      }
-
-      if (version < 2) {
-        std::stringstream ss_graph;
-        const auto n = in.ReadAs<uint64_t>();
-        std::string buf;
-        buf.resize(n);
-        if (n > 0) {
-          in.ReadBuffer(buf.data(), buf.size());
-          ss_graph.str(std::move(buf));
-          gtsam2mrpt_serial::internal::boost_load_binary(
-            ss_graph, gtsam_data->graph_factors, gtsam_data->graph_values);
-        }
-      } else {
-        in >> gtsam_data->graph_factors >> gtsam_data->graph_values;
-      }
+      in >> time_to_kf_id >> keyframe_observations;
+      in >> accum_odom_since_last_kf;
+      in >> gtsam_data.graph_factors >> gtsam_data.graph_values;
       break;
     default:
       MRPT_THROW_UNKNOWN_SERIALIZATION_VERSION(version);
@@ -249,7 +234,7 @@ void SlamMapperState::serialize_from(mrpt::serialization::CArchive & in)
   pointcloud_generators = std::move(backup_pc_gens);
   pointcloud_filters = std::move(backup_pc_filters);
 
-  this->add_kf_connectivity_from_factor_graph(gtsam_data->graph_factors);
+  this->add_kf_connectivity_from_factor_graph(gtsam_data.graph_factors);
 }
 
 // ============================================================================
@@ -258,13 +243,9 @@ void SlamMapperState::serialize_from(mrpt::serialization::CArchive & in)
 
 Mapper2D::Mapper2D() { COutputLogger::setLoggerName("Mapper2D"); }
 
-void Mapper2D::initialize(const std::string & yaml_config_file)
+void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
 {
   MRPT_START
-
-  ASSERT_FILE_EXISTS_(yaml_config_file);
-
-  const auto cfg = mola::load_yaml_file(yaml_config_file);
 
   MCP_LOAD_REQ(cfg, max_icp_search_distance);
   MCP_LOAD_REQ(cfg, min_icp_quality_odometry);
@@ -291,7 +272,9 @@ void Mapper2D::initialize(const std::string & yaml_config_file)
 
   {
     MRPT_LOG_INFO("Sensor labels for simplemap:");
-    for (const auto & s : sensor_labels_for_simplemap) MRPT_LOG_INFO_STREAM("  - '" << s << "'");
+    for (const auto & s : sensor_labels_for_simplemap) {
+      MRPT_LOG_INFO_STREAM("  - '" << s << "'");
+    }
   }
 
   // Odometry ICP:
@@ -354,7 +337,7 @@ void Mapper2D::process_action_observation(
     const auto icp_edges = run_icp_on_nearby_keyframes(nearby_kfs, relocalize_out);
 
     const bool duplicated_timestamp =
-      mapper_state.time2kfid.hasKey(icp_edges.current_observations_timestamp);
+      mapper_state.time_to_kf_id.hasKey(icp_edges.current_observations_timestamp);
 
     if (icp_edges.icp_results.empty() && !mapper_state.empty()) {
       MRPT_LOG_WARN("No valid ICP edges for localization.");
@@ -395,7 +378,9 @@ Mapper2D::RelocalizeCheckOutput Mapper2D::check_needs_relocalization(
 {
   MRPT_START
 
-  if (observations.empty()) return {};
+  if (observations.empty()) {
+    return {};
+  }
 
   RelocalizeCheckOutput out;
   ASSERT_(out.current_frame_map);
@@ -475,9 +460,11 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
   mrpt::maps::CSimplePointsMap kf_pts;
   mrpt::containers::bimap<KeyFrameID, size_t> kf2pt_idx;
 
-  for (const auto & kv : mapper_state.gtsam_data->graph_values) {
+  for (const auto & kv : mapper_state.gtsam_data.graph_values) {
     const auto s = gtsam::Symbol(kv.key);
-    if (s.chr() != 'x') continue;
+    if (s.chr() != 'x') {
+      continue;
+    }
 
     const auto p = mrpt::gtsam_wrappers::toTPose3D(kv.value.cast<gtsam::Pose3>());
     const auto kf_idx = s.index();
@@ -487,23 +474,22 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
     kf2pt_idx.insert(kf_idx, pt_idx);
   }
 
-  if (kf_pts.empty()) return {};
+  if (kf_pts.empty()) {
+    return {};
+  }
 
   kf_pts.kdTreeEnsureIndexBuilt2D();
 
   const auto cur_pose = this->get_current_pose();
   const auto last_kf_id = mapper_state.last_kf_id();
-  const auto topo_ball = mapper_state.get_keyframes_in_topological_radius(
+  const auto topological_ball = mapper_state.get_keyframes_in_topological_radius(
     last_kf_id, min_topological_distance_for_loop_closure);
 
-#if NANOFLANN_VERSION >= 0x150
   std::vector<nanoflann::ResultItem<size_t, float>> neighbors;
-#else
-  std::vector<std::pair<size_t, float>> neighbors;
-#endif
 
   kf_pts.kdTreeRadiusSearch2D(
-    cur_pose.x(), cur_pose.y(), mrpt::square(max_icp_search_distance), neighbors);
+    mrpt::d2f(cur_pose.x()), mrpt::d2f(cur_pose.y()),
+    mrpt::d2f(mrpt::square(max_icp_search_distance)), neighbors);
 
   {
     std::random_device rd;
@@ -516,9 +502,13 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
     const auto kf_id = kf2pt_idx.inverse(idx_dist.first);
     ret.distance_to_kf_ids[std::sqrt(idx_dist.second)] = kf_id;
 
-    if (topo_ball.count(kf_id) != 0) ret.kfs_in_topo_ball.insert(kf_id);
+    if (topological_ball.count(kf_id) != 0) {
+      ret.kfs_in_topological_ball.insert(kf_id);
+    }
 
-    if (max_frames && ret.distance_to_kf_ids.size() >= *max_frames) break;
+    if (max_frames && ret.distance_to_kf_ids.size() >= *max_frames) {
+      break;
+    }
   }
 
   MRPT_LOG_DEBUG_STREAM("Found " << ret.distance_to_kf_ids.size() << " nearby keyframes");
@@ -551,11 +541,11 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
 
     const auto other_pose = mrpt::poses::CPose3D(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(X(other_id))));
+        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(other_id))));
 
     const auto rel_pose = cur_pose - other_pose;
 
-    const bool is_loop_closure = (nearby_kfs.kfs_in_topo_ball.count(other_id) == 0) &&
+    const bool is_loop_closure = (nearby_kfs.kfs_in_topological_ball.count(other_id) == 0) &&
                                  !mapper_state.get_kf_connectivity().edges.empty();
 
     const auto & pc_global = *mapper_state.get_keyframe_metric_map(other_id);
@@ -570,7 +560,7 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
                        << (is_loop_closure ? "yes" : "no"));
 
     mp2p_icp::Results icp_results;
-    double min_quality;
+    double min_quality = 0;
 
     if (!is_loop_closure) {
       min_quality = min_icp_quality_odometry;
@@ -588,7 +578,9 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
                          "(threshold: "
                       << (100.0 * min_quality) << "%)");
 
-    if (icp_results.quality < min_quality) continue;
+    if (icp_results.quality < min_quality) {
+      continue;
+    }
 
     ret.icp_results[other_id] = icp_results;
   }
@@ -613,7 +605,7 @@ void Mapper2D::insert_new_keyframe_and_odometry_edge(
     last_kf_id = mapper_state.last_kf_id();
     const auto last_pose = mrpt::poses::CPose3D(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(X(*last_kf_id))));
+        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(*last_kf_id))));
 
     initial_pose_guess = get_current_pose();
   }
@@ -624,28 +616,32 @@ void Mapper2D::insert_new_keyframe_and_odometry_edge(
 
   ASSERT_EQUAL_(kf_id, *icp_edges_out.current_observations->id);
 
-  mapper_state.gtsam_data->graph_values.insert(
+  mapper_state.gtsam_data.graph_values.insert(
     X(kf_id), mrpt::gtsam_wrappers::toPose3(initial_pose_guess));
 
   if (is_first_kf) {
     auto prior_noise = gtsam::noiseModel::Isotropic::Sigma(6, 1.0);
-    mapper_state.gtsam_data->graph_factors.addPrior(
+    mapper_state.gtsam_data.graph_factors.addPrior(
       X(kf_id), mrpt::gtsam_wrappers::toPose3(initial_pose_guess), prior_noise);
   }
 
-  mapper_state.time2kfid.insert(obs_time, kf_id);
+  mapper_state.time_to_kf_id.insert(obs_time, kf_id);
 
   {
     auto & sf = mapper_state.keyframe_observations[kf_id];
-    for (const auto & label : sensor_labels_for_simplemap)
-      if (auto obs = observations.getObservationBySensorLabel(label); obs) sf.insert(obs);
+    for (const auto & label : sensor_labels_for_simplemap) {
+      if (auto obs = observations.getObservationBySensorLabel(label); obs) {
+        sf.insert(obs);
+      }
+    }
   }
 
   mapper_state.set_keyframe_metric_map(kf_id, icp_edges_out.current_observations);
 
   if (
     last_kf_id.has_value() &&
-    std::abs(mrpt::system::timeDifference(mapper_state.time2kfid.inverse(*last_kf_id), obs_time)) <
+    std::abs(
+      mrpt::system::timeDifference(mapper_state.time_to_kf_id.inverse(*last_kf_id), obs_time)) <
       max_time_for_odometry_edge) {
     mrpt::poses::CPose3DPDFGaussianInf odometry_edge;
     odometry_edge.mean = mrpt::poses::CPose3D(mapper_state.accum_odom_since_last_kf.mean);
@@ -661,7 +657,7 @@ void Mapper2D::insert_new_keyframe_and_odometry_edge(
 
     auto odo_noise = gtsam::noiseModel::Gaussian::Covariance(odo_cov);
 
-    mapper_state.gtsam_data->graph_factors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+    mapper_state.gtsam_data.graph_factors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       X(*last_kf_id), X(kf_id), mrpt::gtsam_wrappers::toPose3(odometry_edge.mean), odo_noise);
 
     mapper_state.add_kf_connectivity(*last_kf_id, kf_id);
@@ -684,7 +680,8 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
   const auto tentative_kf_id = mapper_state.generate_new_kf_id();
   auto prior_noise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
 
-  gtsam::NonlinearFactorGraph fg_edges, fg;
+  gtsam::NonlinearFactorGraph fg_edges;
+  gtsam::NonlinearFactorGraph fg;
   gtsam::Values values;
 
   for (const auto & [kf_id, icp_result] : icp_edges.icp_results) {
@@ -695,16 +692,17 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
 
     gtsam::noiseModel::Base::shared_ptr icp_rob_noise;
 
-    if (icp_edge_robust_parameter > 0)
+    if (icp_edge_robust_parameter > 0) {
       icp_rob_noise = gtsam::noiseModel::Robust::Create(
         gtsam::noiseModel::mEstimator::Fair::Create(icp_edge_robust_parameter), icp_noise);
-    else
+    } else {
       icp_rob_noise = icp_noise;
+    }
 
     fg_edges.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       X(kf_id), X(tentative_kf_id), mrpt::gtsam_wrappers::toPose3(icp_edge.mean), icp_rob_noise);
 
-    const auto kf_pose = mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(X(kf_id));
+    const auto kf_pose = mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id));
     fg.addPrior(X(kf_id), kf_pose, prior_noise);
 
     values.insert(X(kf_id), kf_pose);
@@ -723,19 +721,19 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
   lm_params.maxIterations = 20;
 
   auto optimizer = gtsam::LevenbergMarquardtOptimizer(fg, values, lm_params);
-  const auto & optim_values = optimizer.optimize();
+  const auto & optimal_values = optimizer.optimize();
 
-  const auto cur_optim_pose = optimValues.at<gtsam::Pose3>(X(tentative_kf_id));
+  const auto cur_optimal_pose = optimal_values.at<gtsam::Pose3>(X(tentative_kf_id));
 
   mapper_state.last_localization =
-    mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(cur_optim_pose));
+    mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(cur_optimal_pose));
   mapper_state.last_localization_time = icp_edges.current_observations_timestamp;
 
   mapper_state.accum_odom_since_last_localization = mrpt::poses::CPose3D::Identity();
 
   MRPT_LOG_DEBUG_STREAM("Localization updated: pose=" << mapper_state.last_localization);
 
-  ret.factor_graph_edges = std::move(fg_edges);
+  ret.factor_graph_edges = fg_edges;
   ret.tentative_new_kf_id = tentative_kf_id;
 
   return ret;
@@ -745,20 +743,22 @@ void Mapper2D::add_icp_edges_to_graph(const LocalizationOutput & loc_out)
 {
   using gtsam::symbol_shorthand::X;
 
-  mapper_state.gtsam_data->graph_factors += loc_out.factor_graph_edges;
+  mapper_state.gtsam_data.graph_factors += loc_out.factor_graph_edges;
   mapper_state.add_kf_connectivity_from_factor_graph(loc_out.factor_graph_edges);
 
-  mapper_state.gtsam_data->graph_values.update(
+  mapper_state.gtsam_data.graph_values.update(
     X(loc_out.tentative_new_kf_id), mrpt::gtsam_wrappers::toPose3(get_current_pose()));
 }
 
-bool Mapper2D::try_replace_old_keyframes(
+bool Mapper2D::try_replace_old_keyframes(  // NOLINT
   const LocalizationOutput & loc_out, const ICPEdgesOutput & icp_edges,
   const mrpt::obs::CSensoryFrame & observations)
 {
   using gtsam::symbol_shorthand::X;
 
-  if (icp_edges.icp_results.empty()) return false;
+  if (icp_edges.icp_results.empty()) {
+    return false;
+  }
 
   const auto cur_kf_id = loc_out.tentative_new_kf_id;
   const double cur_kf_time = mrpt::Clock::toDouble(icp_edges.current_observations_timestamp);
@@ -766,13 +766,20 @@ bool Mapper2D::try_replace_old_keyframes(
   bool replacement_done = false;
 
   for (const auto & [other_kf_id, icp_edge] : icp_edges.icp_results) {
-    if (icp_edge.quality < min_icp_quality_keyframe_replacement) continue;
+    {
+      if (icp_edge.quality < min_icp_quality_keyframe_replacement) {
+        continue;
+      }
+    }
 
     const auto & rel_pose_old_to_cur = icp_edge.optimal_tf.mean;
-    const double other_kf_time = mrpt::Clock::toDouble(mapper_state.time2kfid.inverse(other_kf_id));
+    const double other_kf_time =
+      mrpt::Clock::toDouble(mapper_state.time_to_kf_id.inverse(other_kf_id));
 
     const double age = cur_kf_time - other_kf_time;
-    if (age < min_keyframe_age_for_replacement) continue;
+    if (age < min_keyframe_age_for_replacement) {
+      continue;
+    }
 
     MRPT_LOG_DEBUG_STREAM(
       "Replacing old KF#" << other_kf_id << " (age=" << age
@@ -787,16 +794,18 @@ bool Mapper2D::try_replace_old_keyframes(
 
     gtsam::NonlinearFactorGraph new_factors;
 
-    for (auto & f : mapper_state.gtsam_data->graph_factors) {
+    for (auto & f : mapper_state.gtsam_data.graph_factors) {
       if (const auto * prior_factor =
             dynamic_cast<const gtsam::PriorFactor<gtsam::Pose3> *>(f.get());
           prior_factor) {
         const auto key1 = gtsam::Symbol(prior_factor->key());
         ASSERT_(key1.chr() == 'x');
 
-        if (key1.index() != other_kf_id) continue;
+        if (key1.index() != other_kf_id) {
+          continue;
+        }
 
-        gtsam::Pose3 new_prior_pose = mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(key1) *
+        gtsam::Pose3 new_prior_pose = mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(key1) *
                                       mrpt::gtsam_wrappers::toPose3(rel_pose_old_to_cur);
 
         auto new_prior = boost::make_shared<gtsam::PriorFactor<gtsam::Pose3>>(
@@ -823,7 +832,9 @@ bool Mapper2D::try_replace_old_keyframes(
           old_to_new_other = between_factor->measured().inverse();
         }
 
-        if (!new_other_kf_id.has_value()) continue;
+        if (!new_other_kf_id.has_value()) {
+          continue;
+        }
 
         if (*new_other_kf_id == cur_kf_id) {
           f.reset();
@@ -845,7 +856,7 @@ bool Mapper2D::try_replace_old_keyframes(
       }
     }
 
-    mapper_state.gtsam_data->graph_factors += new_factors;
+    mapper_state.gtsam_data.graph_factors += new_factors;
     internal_delete_keyframe(other_kf_id);
   }
 
@@ -859,23 +870,24 @@ void Mapper2D::optimize_pose_graph()
   auto lm_params = gtsam::LevenbergMarquardtParams::LegacyDefaults();
   lm_params.maxIterations = 100;
 
-  const auto n_factors = mapper_state.gtsam_data->graph_factors.size();
+  const auto n_factors = mapper_state.gtsam_data.graph_factors.size();
+  const auto n_factors_1 = n_factors > 0 ? 1.0 / static_cast<double>(n_factors) : 1.0;
 
-  lm_params.iterationHook = [n_factors](size_t iter, double err_init, double err_final) {
-    std::cout << "[LM] iter: " << iter << " rmse: " << std::sqrt(err_init / n_factors) << " => "
-              << std::sqrt(err_final / n_factors) << std::endl;
+  lm_params.iterationHook = [n_factors_1](size_t iter, double err_init, double err_final) {
+    std::cout << "[LM] iter: " << iter << " rmse: " << std::sqrt(err_init * n_factors_1) << " => "
+              << std::sqrt(err_final * n_factors_1) << "\n";
   };
 
   auto optimizer = gtsam::LevenbergMarquardtOptimizer(
-    mapper_state.gtsam_data->graph_factors, mapper_state.gtsam_data->graph_values, lm_params);
+    mapper_state.gtsam_data.graph_factors, mapper_state.gtsam_data.graph_values, lm_params);
 
   if (debug_print_factor_graphs) {
-    mapper_state.gtsam_data->graph_factors.print();
-    mapper_state.gtsam_data->graph_values.print();
+    mapper_state.gtsam_data.graph_factors.print();
+    mapper_state.gtsam_data.graph_values.print();
   }
 
-  const auto & optim_values = optimizer.optimize();
-  mapper_state.gtsam_data->graph_values = optim_values;
+  const auto & optimal_values = optimizer.optimize();
+  mapper_state.gtsam_data.graph_values = optimal_values;
 }
 
 mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
@@ -891,7 +903,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   gl_edges->setColor_u8(0x00, 0x00, 0xff, 0x60);
 
   // Keyframe poses
-  for (const auto & kv : mapper_state.gtsam_data->graph_values) {
+  for (const auto & kv : mapper_state.gtsam_data.graph_values) {
     const auto key = kv.key;
     const auto pose = mrpt::gtsam_wrappers::toTPose3D(kv.value.cast<gtsam::Pose3>());
 
@@ -903,14 +915,16 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   }
 
   // Edges
-  for (const auto & f : mapper_state.gtsam_data->graph_factors) {
-    auto between_fac = dynamic_cast<const gtsam::BetweenFactor<gtsam::Pose3> *>(f.get());
-    if (!between_fac) continue;
+  for (const auto & f : mapper_state.gtsam_data.graph_factors) {
+    const auto * between_fac = dynamic_cast<const gtsam::BetweenFactor<gtsam::Pose3> *>(f.get());
+    if (between_fac == nullptr) {
+      continue;
+    }
 
     const auto key1 = mrpt::gtsam_wrappers::toTPose3D(
-      mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(between_fac->key1()));
+      mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key1()));
     const auto key2 = mrpt::gtsam_wrappers::toTPose3D(
-      mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(between_fac->key2()));
+      mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key2()));
 
     gl_edges->appendLine(key1.translation(), key2.translation());
   }
@@ -919,7 +933,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   gl_map->insert(gl_pose_graph);
 
   // Point clouds
-  for (const auto & kv : mapper_state.time2kfid.getDirectMap()) {
+  for (const auto & kv : mapper_state.time_to_kf_id.getDirectMap()) {
     const auto kf_id = kv.second;
     const auto & pc = mapper_state.get_keyframe_metric_map(kf_id);
 
@@ -930,7 +944,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
       color_mode.colorMap = mrpt::img::cmHOT;
       color_mode.colorMapMinCoord = -0.5f;
       color_mode.colorMapMaxCoord = 5.0f;
-      color_mode.recolorizeByCoordinate = mp2p_icp::Coordinate::Z;
+      color_mode.recolorizeByField = "z";
 
       gl_pts = pc->get_visualization(rp);
     }
@@ -938,7 +952,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
     using gtsam::symbol_shorthand::X;
     gl_pts->setPose(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data->graph_values.at<gtsam::Pose3>(X(kf_id))));
+        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id))));
 
     gl_map->insert(gl_pts);
   }

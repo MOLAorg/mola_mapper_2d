@@ -15,7 +15,7 @@ if("$ENV{ROS_VERSION}" STREQUAL "2")
 endif()
 
 # Tell CMake we'll use C++ for use in its tests/flags
-project(mola_lidar_odometry LANGUAGES CXX)
+project(mola_mapper_2d LANGUAGES CXX)
 
 # MOLA CMake scripts: "mola_xxx()"
 find_package(mola_common REQUIRED)
@@ -24,33 +24,43 @@ find_package(mola_common REQUIRED)
 find_package(mrpt-maps REQUIRED)
 find_package(mrpt-tclap REQUIRED)
 find_package(mola_kernel REQUIRED)
+find_package(mola_yaml REQUIRED)
 find_package(mp2p_icp REQUIRED)
 find_package(mp2p_icp_filters REQUIRED)
 find_package(mola_pose_list REQUIRED)
-find_package(mola_imu_preintegration REQUIRED)
+find_package(GTSAM REQUIRED)
+find_package(gtsam2mrpt_serial REQUIRED)
 
 # -----------------------
 # define lib:
-file(GLOB_RECURSE LIB_SRCS module/src/*.cpp module/src/*.h)
-file(GLOB_RECURSE LIB_PUBLIC_HDRS module/include/*.h)
+set(LIB_SOURCES
+  module/src/Mapper2D.cpp
+  module/src/register.cpp
+)
+set(LIB_PUBLIC_HEADERS
+  module/include/mola_mapper_2d/Mapper2D.h
+)
 
 mola_add_library(
   TARGET ${PROJECT_NAME}
-  SOURCES ${LIB_SRCS} ${LIB_PUBLIC_HDRS}
+  SOURCES ${LIB_SOURCES} ${LIB_PUBLIC_HEADERS}
   PUBLIC_LINK_LIBRARIES
+    gtsam
     mrpt::maps
     mola::mola_kernel
+    mola::mola_yaml
     mola::mp2p_icp
     mola::mp2p_icp_filters
     mola::mola_pose_list
-    mola::mola_imu_preintegration
-# PRIVATE_LINK_LIBRARIES
-#  mrpt::maps
+    mola::gtsam2mrpt_serial
   CMAKE_DEPENDENCIES
     mola_kernel
+    mola_yaml
     mp2p_icp
     mp2p_icp_filters
     mrpt-maps
+    mola_pose_list
+    gtsam2mrpt_serial
 )
 
 # mola_add_library() expects headers under "ROOT/include", so do this manually here:
@@ -67,27 +77,16 @@ install(
 mola_version_to_hexadecimal(MP2P_ICP_VERSION_HEX "${mp2p_icp_VERSION}")
 target_compile_definitions(${PROJECT_NAME} PRIVATE MP2P_ICP_VERSION=${MP2P_ICP_VERSION_HEX})
 
-get_target_property(MY_VERSION ${PROJECT_NAME} VERSION)
-target_compile_definitions(${PROJECT_NAME} PRIVATE MOLA_LO_VERSION=\"${MY_VERSION}\")
-
-option(ENABLE_ONLINE_VERSION_CHECK "Enable checking for new versions" ON)
-if(ENABLE_ONLINE_VERSION_CHECK)
-    target_compile_definitions(${PROJECT_NAME}  PRIVATE MOLA_LO_HAS_ONLINE_VERSION_CHECK)
-endif()
-
 # CLI apps
 # ---------------------------------
-find_package(mola_input_kitti_dataset) # optional
-find_package(mola_input_kitti360_dataset) # optional
-find_package(mola_input_mulran_dataset) # optional
 find_package(mola_input_rawlog) # optional
 find_package(mola_input_rosbag2) # optional
-find_package(mola_input_paris_luco_dataset) # optional
 find_package(mola_state_estimation_simple QUIET) # optional
 
+if (0)
 mola_add_executable(
-  TARGET  mola-lidar-odometry-cli
-  SOURCES apps/mola-lidar-odometry-cli.cpp
+  TARGET  mola-mapper-2d-cli
+  SOURCES apps/mola-mapper-2d-cli.cpp
   LINK_LIBRARIES
   ${PROJECT_NAME}
   mrpt::maps
@@ -99,30 +98,6 @@ if(mola_state_estimation_simple_FOUND)
   target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_SE_SIMPLE)
 else()
   message(STATUS "mola-lidar-odometry-cli: With mola_state_estimation_simple = NO")
-endif()
-
-if(mola_input_kitti_dataset_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With Kitti = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_kitti_dataset)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_KITTI)
-else()
-  message(STATUS "mola-lidar-odometry-cli: With Kitti = NO")
-endif()
-
-if(mola_input_kitti360_dataset_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With Kitti360 = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_kitti360_dataset)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_KITTI360)
-else()
-  message(STATUS "mola-lidar-odometry-cli: With Kitti360 = NO")
-endif()
-
-if(mola_input_mulran_dataset_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With Mulran = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_mulran_dataset)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_MULRAN)
-else()
-  message(STATUS "mola-lidar-odometry-cli: With Mulran = NO")
 endif()
 
 if(mola_input_rawlog_FOUND)
@@ -141,37 +116,15 @@ else()
   message(STATUS "mola-lidar-odometry-cli: With rosbag2 = NO")
 endif()
 
-if(mola_input_paris_luco_dataset_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With paris_luco = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_paris_luco_dataset)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_PARIS_LUCO)
-else()
-  message(STATUS "mola-lidar-odometry-cli: With paris_luco = NO")
-endif()
 
+endif() # 0
 
 # Install files:
 install(
   DIRECTORY
-    mola-cli-launchs
-    pipelines
-    ros2-launchs
-    rviz2
-    state-estimator-params
+    #ros2-launchs
   DESTINATION
     share/${PROJECT_NAME}
-)
-
-# Install gui-* demo "executables" too:
-install(
-  PROGRAMS
-    scripts/mola-lo-gui-kitti
-    scripts/mola-lo-gui-kitti360
-    scripts/mola-lo-gui-mulran
-    scripts/mola-lo-gui-rawlog
-    scripts/mola-lo-gui-rosbag2
-  DESTINATION
-    bin
 )
 
 # -----------------------------------------------------------------------------
