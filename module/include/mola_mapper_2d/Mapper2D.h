@@ -187,6 +187,8 @@ public:
  */
 class Mapper2D : public mola::FrontEndBase
 {
+  DEFINE_MRPT_OBJECT(Mapper2D, mola)
+
 public:
   Mapper2D();
   ~Mapper2D() = default;
@@ -251,6 +253,11 @@ public:
   SlamMapperState & get_state() { return mapper_state; }
 
   /** @} */
+
+protected:
+  // ===== Implementation of mola_kernel interfaces =====
+  void onNewObservation(const CObservation::ConstPtr & o) override;
+  void spinOnce() override;
 
 private:
   // ===== Internal structures =====
@@ -318,8 +325,6 @@ private:
 
   SlamMapperState mapper_state;
   mutable std::mutex state_mutex;
-
-  mrpt::system::CTimeLogger profiler;
 
   // Distance threshold for finding ICP edges
   double max_icp_search_distance = 3.0;

@@ -83,7 +83,6 @@ find_package(mola_input_rawlog) # optional
 find_package(mola_input_rosbag2) # optional
 find_package(mola_state_estimation_simple QUIET) # optional
 
-if (0)
 mola_add_executable(
   TARGET  mola-mapper-2d-cli
   SOURCES apps/mola-mapper-2d-cli.cpp
@@ -93,36 +92,33 @@ mola_add_executable(
   mrpt::tclap
 )
 if(mola_state_estimation_simple_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With mola_state_estimation_simple = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_state_estimation_simple)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_SE_SIMPLE)
+  message(STATUS "mola-mapper-2d-cli: With mola_state_estimation_simple = YES")
+  target_link_libraries(mola-mapper-2d-cli mola::mola_state_estimation_simple)
+  target_compile_definitions(mola-mapper-2d-cli PRIVATE HAVE_MOLA_SE_SIMPLE)
 else()
-  message(STATUS "mola-lidar-odometry-cli: With mola_state_estimation_simple = NO")
+  message(STATUS "mola-mapper-2d-cli: With mola_state_estimation_simple = NO")
 endif()
 
 if(mola_input_rawlog_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With Rawlog = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_rawlog)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_RAWLOG)
+  message(STATUS "mola-mapper-2d-cli: With Rawlog = YES")
+  target_link_libraries(mola-mapper-2d-cli mola::mola_input_rawlog)
+  target_compile_definitions(mola-mapper-2d-cli PRIVATE HAVE_MOLA_INPUT_RAWLOG)
 else()
-  message(STATUS "mola-lidar-odometry-cli: With Rawlog = NO")
+  message(STATUS "mola-mapper-2d-cli: With Rawlog = NO")
 endif()
 
 if(mola_input_rosbag2_FOUND)
-  message(STATUS "mola-lidar-odometry-cli: With rosbag2 = YES")
-  target_link_libraries(mola-lidar-odometry-cli mola::mola_input_rosbag2)
-  target_compile_definitions(mola-lidar-odometry-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG2)
+  message(STATUS "mola-mapper-2d-cli: With rosbag2 = YES")
+  target_link_libraries(mola-mapper-2d-cli mola::mola_input_rosbag2)
+  target_compile_definitions(mola-mapper-2d-cli PRIVATE HAVE_MOLA_INPUT_ROSBAG2)
 else()
-  message(STATUS "mola-lidar-odometry-cli: With rosbag2 = NO")
+  message(STATUS "mola-mapper-2d-cli: With rosbag2 = NO")
 endif()
-
-
-endif() # 0
 
 # Install files:
 install(
   DIRECTORY
-    #ros2-launchs
+    params
   DESTINATION
     share/${PROJECT_NAME}
 )

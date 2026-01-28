@@ -62,6 +62,9 @@
 
 namespace mola
 {
+// arguments: class_name, parent_class, class namespace
+IMPLEMENTS_MRPT_OBJECT(Mapper2D, FrontEndBase, mola)
+
 // ============================================================================
 // SlamMapperState Implementation
 // ============================================================================
@@ -323,7 +326,7 @@ void Mapper2D::process_action_observation(
     !mapper_state.pointcloud_generators.empty(),
     "pointcloud_generators is empty: did you call initialize()?");
 
-  auto tle = mrpt::system::CTimeLoggerEntry(profiler, "process_action_observation");
+  auto tle = mrpt::system::CTimeLoggerEntry(profiler_, "process_action_observation");
 
   const auto relocalize_out = check_needs_relocalization(action, observations);
   const auto should_relocalize = relocalize_out.should_relocalize;
@@ -519,7 +522,7 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
 Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
   const NearbyKeyFramesOutput & nearby_kfs, const RelocalizeCheckOutput & relocalize_out) const
 {
-  auto tle = mrpt::system::CTimeLoggerEntry(profiler, "run_icp_on_edges");
+  auto tle = mrpt::system::CTimeLoggerEntry(profiler_, "run_icp_on_edges");
 
   ICPEdgesOutput ret;
   using gtsam::symbol_shorthand::X;
@@ -537,7 +540,7 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
   const auto & pc_local = *ret.current_observations;
 
   for (const auto & [dist, other_id] : nearby_kfs.distance_to_kf_ids) {
-    auto tle2 = mrpt::system::CTimeLoggerEntry(profiler, "run_icp_on_edges.icp");
+    auto tle2 = mrpt::system::CTimeLoggerEntry(profiler_, "run_icp_on_edges.icp");
 
     const auto other_pose = mrpt::poses::CPose3D(
       mrpt::gtsam_wrappers::toTPose3D(
@@ -673,7 +676,7 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
 {
   using gtsam::symbol_shorthand::X;
 
-  auto tle = mrpt::system::CTimeLoggerEntry(profiler, "run_localization_step");
+  auto tle = mrpt::system::CTimeLoggerEntry(profiler_, "run_localization_step");
 
   LocalizationOutput ret;
 
@@ -865,7 +868,7 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
 
 void Mapper2D::optimize_pose_graph()
 {
-  auto tle = mrpt::system::CTimeLoggerEntry(profiler, "optimize_pose_graph");
+  auto tle = mrpt::system::CTimeLoggerEntry(profiler_, "optimize_pose_graph");
 
   auto lm_params = gtsam::LevenbergMarquardtParams::LegacyDefaults();
   lm_params.maxIterations = 100;
@@ -1025,6 +1028,123 @@ void Mapper2D::save_debug_visualization_if_enabled()
       mrpt::format(
         "_%05u_KF%05u.3Dscene", save_cnt++, static_cast<unsigned int>(mapper_state.last_kf_id())));
   }
+}
+
+void Mapper2D::spinOnce()
+{
+  MRPT_TRY_START
+
+  const ProfilerEntry tle(profiler_, "spinOnce");
+
+#if 0
+  processPendingUserRequests();
+
+  // Force a refresh of the GUI?
+  // Executed here since
+  // otherwise the GUI would never show up if inactive, or if the LIDAR
+  // observations are misconfigured and are not been fed in.
+  if (visualizer_ && ((state_.local_map && state_.local_map->empty()) || !isActive())) {
+    if (mrpt::Clock::nowDouble() - gui_.timestampLastUpdateUI > 1.0) {
+      updateVisualization({});
+    }
+  }
+
+  // If SLAM/Localization is disabled, refresh the current map
+  // here if needed, since it won't be published until observations arrive.
+  {
+    auto lckState = mrpt::lockHelper(state_mtx_);
+
+    const auto mapStamp =
+      state_.last_obs_timestamp ? *state_.last_obs_timestamp : mrpt::Clock::now();
+
+    doPublishUpdatedLocalMap(mapStamp);
+  }
+
+  // Publish optional regular diagnostics:
+  if (module_is_time_to_publish_diagnostics()) {
+    onPublishDiagnostics();
+  }
+#endif
+
+  MRPT_TRY_END
+}
+
+void Mapper2D::onNewObservation(const CObservation::ConstPtr & o)
+{
+  MRPT_TRY_START
+  const ProfilerEntry tle(profiler_, "onNewObservation");
+
+  ASSERT_(o);
+
+  THROW_EXCEPTION("Continue here!")
+  //   this->process_action_observation(const mrpt::obs::CActionCollection &action, const mrpt::obs::CSensoryFrame &observations)
+
+#if 0
+  {
+    auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
+
+    if (!state_.initialized) {
+      MRPT_LOG_THROTTLE_ERROR(
+        2.0,
+        "Discarding incoming observations: the system initialize() method has not been called "
+        "yet!");
+      return;
+    }
+    if (state_.fatal_error) {
+      MRPT_LOG_THROTTLE_ERROR(
+        2.0, "Discarding incoming observations: a fatal error ocurred above.");
+
+      this->requestShutdown();  // request end of mola-cli app, if applicable
+      return;
+    }
+
+    // SLAM enabled?
+    if (!state_.active) {
+      // and do not process the observation:
+      return;
+    }
+  }
+
+  // Is it an IMU obs?
+  if (
+    params_.imu_sensor_label &&
+    std::regex_match(o->sensorLabel, params_.imu_sensor_label.value())) {
+    {
+      auto lck = mrpt::lockHelper(is_busy_mtx_);
+      state_.worker_tasks_others++;
+    }
+
+    // Yes, it's an IMU obs:
+    auto fut = worker_others_.enqueue(&LidarOdometry::onIMU, this, o);
+    (void)fut;
+  }
+
+  // Is it GNSS?
+  if (
+    params_.gnss_sensor_label &&
+    std::regex_match(o->sensorLabel, params_.gnss_sensor_label.value())) {
+    {
+      auto lck = mrpt::lockHelper(is_busy_mtx_);
+      state_.worker_tasks_others++;
+    }
+    auto fut = worker_others_.enqueue(&LidarOdometry::onGPS, this, o);
+    (void)fut;
+  }
+
+  // Is it a LIDAR obs?
+  for (const auto & re : params_.lidar_sensor_labels) {
+    if (!std::regex_match(o->sensorLabel, re)) {
+      continue;
+    }
+
+    // Yes, it's a LIDAR obs:
+    sendLidarScanToProcessQueue(o);
+
+    break;  // do not keep processing the list
+  }
+#endif
+
+  MRPT_TRY_END
 }
 
 }  // namespace mola
