@@ -30,6 +30,7 @@
 #include <mrpt/obs/CActionCollection.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/opengl/CPointCloudColoured.h>
+#include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/poses/CPose2D.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/CPosePDFGaussian.h>
@@ -43,6 +44,7 @@
 #include <mp2p_icp_filters/Generator.h>
 
 // MOLA
+#include <mola_kernel/Yaml.h>
 #include <mola_kernel/interfaces/FrontEndBase.h>
 
 // GTSAM:
@@ -51,6 +53,15 @@
 // STD
 #include <mutex>
 #include <optional>
+#include <set>
+
+// Forward declarations (add after existing ones):
+namespace nanogui
+{
+class Window;
+class Label;
+class CheckBox;
+}  // namespace nanogui
 
 namespace mola
 {
@@ -254,7 +265,6 @@ public:
 
   /** @} */
 
-protected:
   // ===== Implementation of mola_kernel interfaces =====
   void onNewObservation(const CObservation::ConstPtr & o) override;
   void spinOnce() override;
@@ -321,10 +331,10 @@ private:
   void internal_delete_keyframe(KeyFrameID kf_id);
 
   // ===== Configuration parameters =====
-  mrpt::containers::yaml viz_params;
+  mrpt::containers::yaml viz_params = mrpt::containers::yaml::Map();
 
   SlamMapperState mapper_state;
-  mutable std::mutex state_mutex;
+  mutable std::recursive_mutex state_mutex;
 
   // Distance threshold for finding ICP edges
   double max_icp_search_distance = 3.0;
@@ -365,6 +375,44 @@ private:
 
   // Visualization cache
   mutable std::map<KeyFrameID, mrpt::opengl::CSetOfObjects::Ptr> cached_viz_point_clouds;
+
+  // ===== GUI/Visualization =====
+
+  struct StateUI
+  {
+    StateUI() = default;
+
+    double timestampLastUpdateUI = 0;
+
+    nanogui::Window * ui = nullptr;
+    nanogui::Label * lbIcpQuality = nullptr;
+    nanogui::Label * lbKeyframes = nullptr;
+    nanogui::Label * lbLoopClosures = nullptr;
+    nanogui::Label * lbTime = nullptr;
+    nanogui::CheckBox * cbActive = nullptr;
+    nanogui::CheckBox * cbMapping = nullptr;
+  };
+
+  StateUI gui_;
+  mutable std::mutex state_gui_mtx_;
+
+  // Visualization state
+  mrpt::opengl::CSetOfObjects::Ptr gl_vehicle_frame_;
+  mrpt::opengl::CSetOfObjects::Ptr gl_path_group_;
+  mrpt::opengl::CSetOfLines::Ptr gl_estimated_path_;
+  int map_update_counter_ = std::numeric_limits<int>::max();
+  bool local_map_needs_viz_update_ = true;
+  std::optional<double> last_yaw_for_viz_camera_;
+
+  // Visualization methods
+  void updateVisualization();
+  void updateVisualizationInitVehFrame();
+  void updateVisualizationCurrentObservation(
+    const mp2p_icp::metric_map_t & current_obs, std::vector<std::function<void()>> & update_tasks);
+  void updateVisualizationLocalMap(std::vector<std::function<void()>> & update_tasks);
+  void updateVisualizationPath(std::vector<std::function<void()>> & update_tasks);
+  void updateVisualizationTextLabels();
+  void internalBuildGUI();
 
   // ICP instances for odometry and loop closure
   mp2p_icp::ICP::Ptr icp_odometry;

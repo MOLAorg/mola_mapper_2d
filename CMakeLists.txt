@@ -35,6 +35,7 @@ find_package(gtsam2mrpt_serial REQUIRED)
 # define lib:
 set(LIB_SOURCES
   module/src/Mapper2D.cpp
+  module/src/Mapper2D_GUI.cpp
   module/src/register.cpp
 )
 set(LIB_PUBLIC_HEADERS

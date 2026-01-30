@@ -47,16 +47,17 @@ params:
   max_dist_to_search_for_icp_edges: 6.0
 
   # Minimum ICP quality for odometry:
-  min_icp_quality_odom: 0.30
+  min_icp_quality_odometry: 0.30
 
   # Minimum ICP quality to accept a LC:
   min_icp_quality_loop_closure: 0.60
 
-  min_icp_quality_replace_old_kf: 0.60 # [0,1]
-  min_old_kf_age: 10 # [seconds]
+  # Minimum ICP quality to replace old keyframes (map updates):
+  min_icp_quality_keyframe_replacement: 0.60 # [0,1]
+  min_keyframe_age_for_replacement: 10 # [seconds]
 
   # How many edges between a potential KF-KF edge to consider it a loop closure:
-  min_topological_dist_for_loop_closure: 20
+  min_topological_distance_for_loop_closure: 20
 
   # Wheels odometry is used to update the last localization until one of the following
   # criteria holds and a new re-localization is run:
@@ -100,9 +101,14 @@ params:
   # to show live progress:
   visualization:
     show_trajectory: true
+    show_local_map: true
     show_current_observation: true # shows "live raw" LiDAR points
-    current_pose_corner_size: 1.5
-    local_map_point_size: 3
+    current_pose_corner_size: 1.0
+    local_map_point_size: 3.0
+    map_update_decimation: 10
+    camera_follows_vehicle: true
+    camera_rotates_with_vehicle: false
+    background_color_gray_level: 0.1
     model:
       - file: ${MOLA_VEHICLE_MODEL_FILE|""} # Default: none
         tf.roll: 90.0 # deg
@@ -139,7 +145,7 @@ icp-lidar-odometry:
     - class: mp2p_icp::Solver_GaussNewton
       enabled: true
       params:
-      maxIterations: 3
+        maxIterations: 3
     - class: mp2p_icp::Solver_Horn
       enabled: true
       params: ~

@@ -31,13 +31,10 @@
 #include <mrpt/core/Clock.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservation2DRangeScan.h>
-#include <mrpt/obs/CObservation3DRangeScan.h>
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/obs/CObservationPointCloud.h>
-#include <mrpt/obs/CObservationRotatingScan.h>
-#include <mrpt/obs/CObservationVelodyneScan.h>
 #include <mrpt/obs/CRawlog.h>
 #include <mrpt/rtti/CObject.h>
 #include <mrpt/system/COutputLogger.h>
@@ -101,6 +98,7 @@ struct Cli
     "/path/to/params.yaml",
     cmd};
 
+#if 0
   TCLAP::ValueArg<std::string> arg_outPath{
     "",
     "output-tum-path",
@@ -110,6 +108,7 @@ struct Cli
     "output-trajectory.txt",
     "output-trajectory.txt",
     cmd};
+#endif
 
   TCLAP::ValueArg<std::string> arg_outTwist{
     "",    "output-twist",     "Save the estimated twist as a TXT file",
@@ -289,7 +288,7 @@ int main_odometry(Cli & cli)  // NOLINT
 {
   // Declare main LO module:
   // ------------------------------------------
-  auto liodom = mola::Mapper2D::Create();
+  auto mapper = mola::Mapper2D::Create();
 
   // Declare state estimator module:
   // ------------------------------------------
@@ -337,14 +336,14 @@ int main_odometry(Cli & cli)  // NOLINT
 
   // Make both modules discoverables to each other:
   // -------------------------------------------------
-  const mola::MinimalModuleContainer moduleContainer = {{liodom, stateEstimator}};
+  const mola::MinimalModuleContainer moduleContainer = {{mapper, stateEstimator}};
 
   // Logging level:
-  mrpt::system::VerbosityLevel logLevel = liodom->getMinLoggingLevel();
+  mrpt::system::VerbosityLevel logLevel = mapper->getMinLoggingLevel();
   if (cli.arg_verbosity_level.isSet()) {
     using vl = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>;
     logLevel = vl::name2value(cli.arg_verbosity_level.getValue());
-    liodom->setVerbosityLevel(logLevel);
+    mapper->setVerbosityLevel(logLevel);
     stateEstimator->setVerbosityLevel(logLevel);
   }
 
@@ -364,12 +363,12 @@ int main_odometry(Cli & cli)  // NOLINT
     auto lck = mrpt::lockHelper(liodom_emitted_log_mtx);
     liodom_emitted_log = false;
   };
-  liodom->mrpt::system::COutputLogger::logRegisterCallback(
+  mapper->mrpt::system::COutputLogger::logRegisterCallback(
     [&](
       [[maybe_unused]] std::string_view msg, const mrpt::system::VerbosityLevel level,
       [[maybe_unused]] std::string_view loggerName,
       [[maybe_unused]] const mrpt::Clock::time_point timestamp) {
-      if (level < liodom->getMinLoggingLevel()) {
+      if (level < mapper->getMinLoggingLevel()) {
         return;
       }
       mark_emitted_log();
@@ -383,15 +382,9 @@ int main_odometry(Cli & cli)  // NOLINT
   // liodom->profiler_.enable();
 
   // liodom->initialize_common(cfg); // can be skipped for a non-MOLA system
-  liodom->initialize(cfg);
+  mapper->initialize(cfg);
 
-  if (cli.arg_outSimpleMap.isSet()) {
-    liodom->params_.simplemap.generate = true;
-    // don't save within the LidarOdometry object, we will do it here in
-    // this cli app:
-    liodom->params_.simplemap.save_final_map_to_file.clear();
-  }
-
+#if 0
   if (cli.arg_lidarLabel.isSet()) {
     liodom->params_.lidar_sensor_labels.assign(1, std::regex(cli.arg_lidarLabel.getValue()));
   }
@@ -399,6 +392,7 @@ int main_odometry(Cli & cli)  // NOLINT
   if (cli.arg_imuLabel.isSet()) {
     liodom->params_.imu_sensor_label = std::regex(cli.arg_imuLabel.getValue());
   }
+#endif
 
   // Select dataset input:
   std::shared_ptr<mola::OfflineDatasetSource> dataset;
@@ -446,20 +440,6 @@ int main_odometry(Cli & cli)  // NOLINT
     outTwist.emplace();
   }
 
-  // Save GT, if available:
-  if (cli.arg_outPath.isSet() && dataset->hasGroundTruthTrajectory()) {
-    using namespace std::string_literals;
-
-    const auto gtPath = dataset->getGroundTruthTrajectory();
-
-    const auto gtOutFile = mrpt::system::fileNameChangeExtension(cli.arg_outPath.getValue(), "") +
-                           "_gt."s + mrpt::system::extractFileExtension(cli.arg_outPath.getValue());
-
-    std::cout << "Ground truth available. Saving it to: " << gtOutFile << "\n";
-
-    gtPath.saveToTextFile_TUM(gtOutFile);
-  }
-
   const double tStart = mrpt::Clock::nowDouble();
 
   size_t lastDatasetEntry = dataset->datasetSize();
@@ -481,30 +461,20 @@ int main_odometry(Cli & cli)  // NOLINT
   for (size_t i = firstDatasetEntry; i < lastDatasetEntry; i++) {
     // Get observations from the dataset:
     using mrpt::obs::CObservation2DRangeScan;
-    using mrpt::obs::CObservation3DRangeScan;
     using mrpt::obs::CObservationGPS;
     using mrpt::obs::CObservationIMU;
     using mrpt::obs::CObservationOdometry;
     using mrpt::obs::CObservationPointCloud;
-    using mrpt::obs::CObservationRotatingScan;
-    using mrpt::obs::CObservationVelodyneScan;
 
     const auto sf = dataset->datasetGetObservations(i);
     ASSERT_(sf);
 
     mrpt::obs::CObservation::Ptr obs;
-    obs = sf->getObservationByClass<CObservationRotatingScan>();
     if (!obs) {
       obs = sf->getObservationByClass<CObservationPointCloud>();
     }
     if (!obs) {
-      obs = sf->getObservationByClass<CObservation3DRangeScan>();
-    }
-    if (!obs) {
       obs = sf->getObservationByClass<CObservation2DRangeScan>();
-    }
-    if (!obs) {
-      obs = sf->getObservationByClass<CObservationVelodyneScan>();
     }
     if (!obs) {
       obs = sf->getObservationByClass<CObservationGPS>();
@@ -524,7 +494,7 @@ int main_odometry(Cli & cli)  // NOLINT
       stateEstimatorAsRawConsumer->onNewObservation(obs);
     }
 
-    liodom->onNewObservation(obs);
+    mapper->onNewObservation(obs);
 
     // Show stats:
     static int cnt = 0;
@@ -543,58 +513,54 @@ int main_odometry(Cli & cli)  // NOLINT
       }
       unmark_emitted_log();
 
-      std::optional<mrpt::poses::CPose3D> lastPose;
-      if (const auto optPoseAndTwist = liodom->lastEstimatedState(); optPoseAndTwist) {
-        const auto [pose, twist] = *optPoseAndTwist;
-        lastPose = pose.mean;
-      }
+      const auto lastPose = mapper->get_current_pose();
 
       std::cout << mrpt::system::progress(pc, 30)
                 << mrpt::format(
                      " %6zu/%6zu (%.02f%%) ETA=%s/T=%s | Pose=%s\n", i, N, 100 * pc,
                      mrpt::system::formatTimeInterval(ETA).c_str(),
                      mrpt::system::formatTimeInterval(totalTime).c_str(),
-                     lastPose.has_value() ? lastPose->asString().c_str() : "(None)");
+                     lastPose.asString().c_str());
       std::cout.flush();
     }
 
-    while (liodom->isBusy()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    // Keep track of vehicle velocities?
+#if 0  // Keep track of vehicle velocities?
     if (outTwist) {
-      if (const auto optPoseAndTwist = liodom->lastEstimatedState(); optPoseAndTwist) {
+      if (const auto optPoseAndTwist = mapper->lastEstimatedState(); optPoseAndTwist) {
         const auto & [pose, tw] = optPoseAndTwist.value();
         outTwist->insert(
           obs->timestamp, mrpt::math::TPose3D(tw.vx, tw.vy, tw.vz, tw.wz, tw.wy, tw.wx));
       }
     }
+#endif
   }
 
+#if 0
   if (cli.arg_outPath.isSet()) {
     const auto fil = cli.arg_outPath.getValue();
-    std::cout << "\nSaving estimated path in TUM format to: " << fil << std::endl;
+    std::cout << "\nSaving estimated path in TUM format to: " << fil
+              << std::endl;  // NOLINT(performance-avoid-endl)
 
     const mrpt::poses::CPose3DInterpolator lastEstimatedTrajectory = liodom->estimatedTrajectory();
-
     lastEstimatedTrajectory.saveToTextFile_TUM(fil);
   }
+#endif
 
   if (cli.arg_outSimpleMap.isSet()) {
     const auto fil = cli.arg_outSimpleMap.getValue();
 
-    auto sm = liodom->reconstructedMap();
+    auto sm = mapper->get_current_map();
 
     std::cout << "\nSaving reconstructed map with " << sm.size() << " keyframes to: " << fil
-              << std::endl;
+              << std::endl;  // NOLINT(performance-avoid-endl)
 
     sm.saveToFile(fil);
   }
 
   if (outTwist) {
     const auto fil = cli.arg_outTwist.getValue();
-    std::cout << "\nSaving estimated twist to: " << fil << std::endl;
+    std::cout << "\nSaving estimated twist to: " << fil
+              << std::endl;  // NOLINT(performance-avoid-endl)
     outTwist->saveToTextFile(fil);
   }
 
@@ -608,7 +574,9 @@ int main(int argc, char ** argv)
     Cli cli;
 
     // Parse arguments:
-    if (!cli.cmd.parse(argc, argv)) return 1;  // should exit.
+    if (!cli.cmd.parse(argc, argv)) {
+      return 1;  // should exit.
+    }
 
     // Load plugins:
     if (cli.arg_plugins.isSet()) {
@@ -616,7 +584,7 @@ int main(int argc, char ** argv)
       const auto plugins = cli.arg_plugins.getValue();
       std::cout << "Loading plugin(s): " << plugins << "\n";
       if (!mrpt::system::loadPluginModules(plugins, errMsg)) {
-        std::cerr << errMsg << std::endl;
+        std::cerr << errMsg << std::endl;  // NOLINT(performance-avoid-endl)
         return 1;
       }
     }

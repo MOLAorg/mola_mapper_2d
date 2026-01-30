@@ -271,6 +271,11 @@ void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
   MCP_LOAD_REQ(cfg, icp_edge_sigma);
   MCP_LOAD_REQ(cfg, icp_edge_robust_parameter);
 
+  // Load visualization parameters
+  if (cfg.has("visualization")) {
+    viz_params = cfg["visualization"];
+  }
+
   sensor_labels_for_simplemap = cfg["sensor_labels_for_simplemap"].toStdVector<std::string>();
 
   {
@@ -372,6 +377,10 @@ void Mapper2D::process_action_observation(
   }
 
   save_debug_visualization_if_enabled();
+
+  if (visualizer_) {
+    updateVisualization();
+  }
 
   MRPT_END
 }
@@ -897,6 +906,8 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 {
   using namespace std::string_literals;
 
+  auto lck = mrpt::lockHelper(state_mutex);
+
   auto gl_map = mrpt::opengl::CSetOfObjects::Create();
 
   // Pose graph visualization
@@ -1036,16 +1047,16 @@ void Mapper2D::spinOnce()
 
   const ProfilerEntry tle(profiler_, "spinOnce");
 
-#if 0
-  processPendingUserRequests();
+  // processPendingUserRequests();
 
+#if 0
   // Force a refresh of the GUI?
   // Executed here since
   // otherwise the GUI would never show up if inactive, or if the LIDAR
   // observations are misconfigured and are not been fed in.
   if (visualizer_ && ((state_.local_map && state_.local_map->empty()) || !isActive())) {
     if (mrpt::Clock::nowDouble() - gui_.timestampLastUpdateUI > 1.0) {
-      updateVisualization({});
+      updateVisualization();
     }
   }
 
@@ -1076,7 +1087,7 @@ void Mapper2D::onNewObservation(const CObservation::ConstPtr & o)
 
   ASSERT_(o);
 
-  THROW_EXCEPTION("Continue here!")
+  THROW_EXCEPTION("Continue here!");
   //   this->process_action_observation(const mrpt::obs::CActionCollection &action, const mrpt::obs::CSensoryFrame &observations)
 
 #if 0
