@@ -22,12 +22,15 @@
 
 // MRPT
 #include <mrpt/containers/bimap.h>
+#include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/graphs/CDirectedGraph.h>
 #include <mrpt/graphs/dijkstra.h>
 #include <mrpt/maps/CMetricMap.h>
 #include <mrpt/maps/CSimpleMap.h>
 #include <mrpt/math/TPose2D.h>
-#include <mrpt/obs/CActionCollection.h>
+#include <mrpt/obs/CObservation2DRangeScan.h>
+#include <mrpt/obs/CObservationGPS.h>
+#include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/opengl/CPointCloudColoured.h>
 #include <mrpt/opengl/CSetOfLines.h>
@@ -53,9 +56,10 @@
 // STD
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <set>
 
-// Forward declarations (add after existing ones):
+// Forward declarations
 namespace nanogui
 {
 class Window;
@@ -81,20 +85,42 @@ using KeyFrameConnectivityDijkstra = mrpt::graphs::CDijkstra<KeyFrameConnectivit
  * - Keyframe observations and point clouds
  * - Odometry accumulation
  * - Keyframe connectivity for topological queries
- */
+*
+*
+* ## Flow diagram for incoming observations
+* 
+* ```
+* External source -> onNewObservation(obs)
+*                    |
+*                    +--> [Odometry?] -> onOdometry() -> Update accum_odom_*
+*                    |
+*                    +--> [GNSS?] -> onGNSS() -> Store in last_gnss_ queue
+*                    |
+*                    +--> [LiDAR?] -> worker_lidar_.enqueue(onLidar)
+*                                     |
+*                                     v
+*                                [Worker thread]
+*                                     |
+*                                     v
+*                                processLidarScan()
+*                                     |
+*                                     v
+*                                processSlamStep()
+* ```
+*/
 class SlamMapperState
 {
 public:
   SlamMapperState();
 
   /** @name Configuration from YAML files
-	 *  @{ */
+   *  @{ */
   mp2p_icp_filters::GeneratorSet pointcloud_generators;
   mp2p_icp_filters::FilterPipeline pointcloud_filters;
   /** @} */
 
   /** @name SLAM State Data
-	 *  @{ */
+   *  @{ */
 
   // PIMPL to gtsam types to avoid requiring gtsam headers in client code
   struct Impl
@@ -135,7 +161,7 @@ public:
   /** @} */
 
   /** @name Methods
-	 *  @{ */
+   *  @{ */
 
   void clear() { *this = SlamMapperState(); }
   bool empty() const { return time_to_kf_id.empty(); }
@@ -193,8 +219,8 @@ public:
  * 
  * Integration with MOLA:
  * - Can be used as a backend in a MOLA-based pipeline
- * - Receives observations via processActionObservation()
- * - Publishes optimized maps via getCurrentBestMap()
+ * - Receives observations via onNewObservation()
+ * - Publishes optimized maps via get_current_map()
  */
 class Mapper2D : public mola::FrontEndBase
 {
@@ -202,7 +228,7 @@ class Mapper2D : public mola::FrontEndBase
 
 public:
   Mapper2D();
-  ~Mapper2D() = default;
+  ~Mapper2D();
 
   // Prevent copying and moving
   Mapper2D(const Mapper2D &) = delete;
@@ -211,57 +237,56 @@ public:
   Mapper2D & operator=(Mapper2D &&) = delete;
 
   /** @name Main API
-	 * @{ */
+   * @{ */
 
 protected:
   /**
-	 * Initialize from YAML configuration file.
-	 * Expected structure: see package example YAML files.
-	 */
+   * Initialize from YAML configuration file.
+   * Expected structure: see package example YAML files.
+   */
   void initialize_frontend(const Yaml & cfg) override;
 
 public:
   /**
-	 * Main entry point for SLAM processing.
-	 * 
-	 * Processes an action-observation pair:
-	 * @param action Robot movement (odometry)
-	 * @param observations Sensor observations (lidar, etc.)
-	 */
-  void process_action_observation(
-    const mrpt::obs::CActionCollection & action, const mrpt::obs::CSensoryFrame & observations);
-
-  /**
-	 * Get the current best estimate of the robot pose.
-	 */
+   * Get the current best estimate of the robot pose.
+   */
   mrpt::poses::CPose3D get_current_pose() const;
 
   /**
-	 * Get the current best estimated map.
-	 */
+   * Get the current best estimated map.
+   */
   mrpt::maps::CSimpleMap get_current_map() const;
 
   /**
-	 * Resume a SLAM session from a saved state.
-	 * 
-	 * Call this after deserializing a state for session resumption.
-	 * The pose should come from external localization (e.g., particle filter).
-	 * Small pose errors are tolerated and corrected after robot movement resumes.
-	 * 
-	 * @param current_pose Initial pose estimate for resumption
-	 */
+   * Resume a SLAM session from a saved state.
+   * 
+   * Call this after deserializing a state for session resumption.
+   * The pose should come from external localization (e.g., particle filter).
+   * Small pose errors are tolerated and corrected after robot movement resumes.
+   * 
+   * @param current_pose Initial pose estimate for resumption
+   */
   void resume_session(const mrpt::poses::CPose3D & current_pose);
 
   /**
-	 * Access the complete SLAM state for serialization.
-	 * 
-	 * @warning Do not call process_action_observation() from another thread
-	 *          while holding a reference to the returned state object.
-	 */
-  const SlamMapperState & get_state() const { return mapper_state; }
+   * Access the complete SLAM state for serialization.
+   * 
+   * @warning Do not call onNewObservation() from another thread
+   *          while holding a reference to the returned state object.
+   */
+  const SlamMapperState & get_state() const { return mapper_state_; }
 
   /// Non-const version for deserialization.
-  SlamMapperState & get_state() { return mapper_state; }
+  SlamMapperState & get_state() { return mapper_state_; }
+
+  /** Returns true if the worker thread is busy processing observations. */
+  bool isBusy() const;
+
+  /** Returns true if the SLAM system is active and processing observations. */
+  bool isActive() const;
+
+  /** Enable or disable SLAM processing. */
+  void setActive(bool active);
 
   /** @} */
 
@@ -298,10 +323,51 @@ private:
     KeyFrameID tentative_new_kf_id;
   };
 
+  // ===== State flags (protected by state_flags_mtx_) =====
+  struct StateFlags
+  {
+    bool initialized = false;
+    bool fatal_error = false;
+    bool active = true;
+    uint32_t worker_tasks_lidar = 0;
+  };
+  StateFlags state_flags_;
+  mutable std::mutex state_flags_mtx_;
+
+  // ===== Odometry state (protected by odometry_mtx_) =====
+  struct OdometryState
+  {
+    std::optional<mrpt::poses::CPose2D> last_absolute_odometry;
+    std::optional<mrpt::Clock::time_point> last_odometry_timestamp;
+  };
+  OdometryState odometry_state_;
+  mutable std::mutex odometry_mtx_;
+
+  // ===== GNSS state (protected by gnss_mtx_) =====
+  std::map<mrpt::Clock::time_point, std::shared_ptr<const mrpt::obs::CObservationGPS>> last_gnss_;
+  mutable std::mutex gnss_mtx_;
+  static constexpr size_t GNSS_QUEUE_MAX_SIZE = 100;
+
   // ===== Internal methods =====
 
+  /** Worker thread callback for processing lidar observations */
+  void onLidar(const CObservation::ConstPtr & o);
+
+  /** Process a single lidar scan (called from worker thread) */
+  void processLidarScan(const mrpt::obs::CObservation2DRangeScan::ConstPtr & scan);
+
+  /** Handle odometry observation */
+  void onOdometry(const mrpt::obs::CObservationOdometry::ConstPtr & o);
+
+  /** Handle GNSS observation */
+  void onGNSS(const mrpt::obs::CObservationGPS::ConstPtr & o);
+
+  /** Main SLAM processing step */
+  void processSlamStep(
+    const mrpt::obs::CSensoryFrame & observations, const mrpt::poses::CPosePDFGaussian & odom_incr);
+
   RelocalizeCheckOutput check_needs_relocalization(
-    const mrpt::obs::CActionCollection & action, const mrpt::obs::CSensoryFrame & observations);
+    const mrpt::obs::CSensoryFrame & observations, const mrpt::poses::CPosePDFGaussian & odom_incr);
 
   NearbyKeyFramesOutput find_nearby_keyframes(
     const std::optional<size_t> & max_frames = std::nullopt) const;
@@ -330,51 +396,78 @@ private:
 
   void internal_delete_keyframe(KeyFrameID kf_id);
 
-  // ===== Configuration parameters =====
-  mrpt::containers::yaml viz_params = mrpt::containers::yaml::Map();
+  /** Get closest GNSS observation to the given timestamp */
+  mrpt::obs::CObservationGPS::ConstPtr getClosestGNSS(
+    const mrpt::Clock::time_point & timestamp, double max_age_seconds = 1.0) const;
 
-  SlamMapperState mapper_state;
-  mutable std::recursive_mutex state_mutex;
+  // ===== Configuration parameters =====
+
+  /** List of sensor labels or regex's for LiDAR observations */
+  std::vector<std::regex> lidar_sensor_labels_;
+
+  /** Sensor label regex for odometry observations */
+  std::optional<std::regex> odometry_sensor_label_;
+
+  /** Sensor label regex for GNSS observations */
+  std::optional<std::regex> gnss_sensor_label_;
+
+  /** Minimum time between scans to process */
+  double min_time_between_scans_ = 0.01;  // [s]
+
+  mrpt::containers::yaml viz_params_ = mrpt::containers::yaml::Map();
+
+  SlamMapperState mapper_state_;
+  mutable std::recursive_mutex state_mtx_;
 
   // Distance threshold for finding ICP edges
-  double max_icp_search_distance = 3.0;
+  double max_icp_search_distance_ = 3.0;
 
   // ICP quality thresholds
-  double min_icp_quality_odometry = 0.30;
-  double min_icp_quality_loop_closure = 0.60;
-  double min_icp_quality_keyframe_replacement = 0.60;
+  double min_icp_quality_odometry_ = 0.30;
+  double min_icp_quality_loop_closure_ = 0.60;
+  double min_icp_quality_keyframe_replacement_ = 0.60;
 
   // Keyframe management
-  double min_keyframe_age_for_replacement = 10.0;  // [s]
-  double max_translation_between_keyframes = 0.5;  // [m]
-  double max_rotation_between_keyframes = mrpt::DEG2RAD(20.0);
-  double max_time_for_odometry_edge = 10.0;  // [s]
+  double min_keyframe_age_for_replacement_ = 10.0;  // [s]
+  double max_translation_between_keyframes_ = 0.5;  // [m]
+  double max_rotation_between_keyframes_ = mrpt::DEG2RAD(20.0);
+  double max_time_for_odometry_edge_ = 10.0;  // [s]
 
   // Loop closure detection
-  uint32_t min_topological_distance_for_loop_closure = 20;
+  uint32_t min_topological_distance_for_loop_closure_ = 20;
 
   // Localization frequency control
-  double max_time_between_localizations = 5.0;         // [s]
-  double max_translation_between_localizations = 0.5;  // [m]
-  double max_rotation_between_localizations = mrpt::DEG2RAD(20.0);
-  double max_lost_without_icp = 4.0;  // [m], threshold for forced KF insertion
+  double max_time_between_localizations_ = 5.0;         // [s]
+  double max_translation_between_localizations_ = 0.5;  // [m]
+  double max_rotation_between_localizations_ = mrpt::DEG2RAD(20.0);
+  double max_lost_without_icp_ = 4.0;  // [m], threshold for forced KF insertion
 
-  uint32_t max_icp_edges_per_localization = 10;
+  uint32_t max_icp_edges_per_localization_ = 10;
 
   // Edge noise parameters
-  double odometry_edge_sigma = 0.10;
-  double icp_edge_sigma = 0.10;
-  double icp_edge_robust_parameter = 10.0;
+  double odometry_edge_sigma_ = 0.10;
+  double icp_edge_sigma_ = 0.10;
+  double icp_edge_robust_parameter_ = 10.0;
 
   // Debug/output options
-  int save_3d_scenes_decimation = 0;  // 0: disabled
-  std::string save_3d_scenes_prefix = "./_debug_mapper2d";
-  bool debug_print_factor_graphs = false;
+  int save_3d_scenes_decimation_ = 0;  // 0: disabled
+  std::string save_3d_scenes_prefix_ = "./_debug_mapper2d";
+  bool debug_print_factor_graphs_ = false;
 
-  std::vector<std::string> sensor_labels_for_simplemap;
+  std::vector<std::string> sensor_labels_for_simplemap_;
 
   // Visualization cache
-  mutable std::map<KeyFrameID, mrpt::opengl::CSetOfObjects::Ptr> cached_viz_point_clouds;
+  mutable std::map<KeyFrameID, mrpt::opengl::CSetOfObjects::Ptr> cached_viz_point_clouds_;
+
+  // ===== Worker thread pool =====
+  mrpt::WorkerThreadsPool worker_lidar_{
+    1 /*num threads*/, mrpt::WorkerThreadsPool::POLICY_FIFO, "worker_lidar"};
+
+  mutable std::mutex is_busy_mtx_;
+  bool destructor_called_ = false;
+
+  // Last processed timestamp to avoid duplicate processing
+  std::optional<mrpt::Clock::time_point> last_lidar_timestamp_;
 
   // ===== GUI/Visualization =====
 
@@ -403,6 +496,7 @@ private:
   int map_update_counter_ = std::numeric_limits<int>::max();
   bool local_map_needs_viz_update_ = true;
   std::optional<double> last_yaw_for_viz_camera_;
+  double last_icp_quality_ = 0.0;
 
   // Visualization methods
   void updateVisualization();
@@ -415,11 +509,11 @@ private:
   void internalBuildGUI();
 
   // ICP instances for odometry and loop closure
-  mp2p_icp::ICP::Ptr icp_odometry;
-  mp2p_icp::Parameters icp_odometry_params;
+  mp2p_icp::ICP::Ptr icp_odometry_;
+  mp2p_icp::Parameters icp_odometry_params_;
 
-  mp2p_icp::ICP::Ptr icp_loop_closure;
-  mp2p_icp::Parameters icp_loop_closure_params;
+  mp2p_icp::ICP::Ptr icp_loop_closure_;
+  mp2p_icp::Parameters icp_loop_closure_params_;
 };
 
 }  // namespace mola

@@ -36,6 +36,7 @@ find_package(gtsam2mrpt_serial REQUIRED)
 set(LIB_SOURCES
   module/src/Mapper2D.cpp
   module/src/Mapper2D_GUI.cpp
+  module/src/Mapper2D_SensorCallbacks.cpp
   module/src/register.cpp
 )
 set(LIB_PUBLIC_HEADERS

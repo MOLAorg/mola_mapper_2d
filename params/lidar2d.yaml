@@ -15,17 +15,21 @@ params:
   # -----------------------------------------------
   # SENSOR INPUTS
   # -----------------------------------------------
-  sensor_labels_for_simplemap: ["lidar"]
-  lidar_sensor_labels: ["${MOLA_LIDAR_NAME|lidar}"]
+  sensor_labels_for_simplemap: ["${MOLA_LIDAR_NAME|lidar}", ".*[Ll]aser.*"]
+
+  lidar_sensor_labels: ["${MOLA_LIDAR_NAME|lidar}", ".*[Ll]aser.*"]
+
+  odometry_sensor_label: "odom.*"
+
+  # These sensor labels will be handled as GNSS (GPS) (For storage in simplemap only)
+  gnss_sensor_label: "gps"
+
   multiple_lidars:
     lidar_count: ${MOLA_LIDAR_COUNT|1} # useful only if using several lidar_sensor_labels or regex's.
     max_time_offset: ${MOLA_LIDAR_MAX_TIME_OFFSET|25e-3} # [s]
 
   # These sensor labels will be handled as IMU observations:
   imu_sensor_label: "imu"
-
-  # These sensor labels will be handled as GNSS (GPS) (For storage in simplemap only)
-  gnss_sensor_label: "gps"
 
   # Optionally, drop lidar data too close in time:
   min_time_between_scans: 1e-3 # [seconds]

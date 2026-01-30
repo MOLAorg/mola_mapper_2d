@@ -79,7 +79,7 @@ void Mapper2D::updateVisualization()
     return;
   }
 
-  auto lck = mrpt::lockHelper(state_mutex);
+  auto lck = mrpt::lockHelper(state_mtx_);
 
   std::vector<std::function<void()>> updateTasks;
 
@@ -89,7 +89,7 @@ void Mapper2D::updateVisualization()
   }
 
   // Update vehicle pose
-  gl_vehicle_frame_->setPose(mapper_state.last_localization);
+  gl_vehicle_frame_->setPose(mapper_state_.last_localization);
   updateTasks.emplace_back(
     [this]() { visualizer_->update_3d_object("mapper2d/vehicle", gl_vehicle_frame_); });
 
@@ -100,9 +100,10 @@ void Mapper2D::updateVisualization()
   updateVisualizationLocalMap(updateTasks);
 
   // Camera follows vehicle (if enabled)
-  if (viz_params.has("camera_follows_vehicle") && viz_params["camera_follows_vehicle"].as<bool>()) {
+  if (
+    viz_params_.has("camera_follows_vehicle") && viz_params_["camera_follows_vehicle"].as<bool>()) {
     updateTasks.emplace_back([this]() {
-      visualizer_->update_viewport_look_at(mapper_state.last_localization.translation());
+      visualizer_->update_viewport_look_at(mapper_state_.last_localization.translation());
     });
   }
 
@@ -131,8 +132,8 @@ void Mapper2D::updateVisualizationInitVehFrame()
 
   // Add coordinate frame corner
   double cornerSize = 1.0;
-  if (viz_params.has("current_pose_corner_size")) {
-    cornerSize = viz_params["current_pose_corner_size"].as<double>();
+  if (viz_params_.has("current_pose_corner_size")) {
+    cornerSize = viz_params_["current_pose_corner_size"].as<double>();
   }
 
   if (cornerSize > 0) {
@@ -141,13 +142,13 @@ void Mapper2D::updateVisualizationInitVehFrame()
   }
 }
 
-void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & updateTasks)
+void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & update_tasks)
 {
   using gtsam::symbol_shorthand::X;
 
   bool showTrajectory = true;
-  if (viz_params.has("show_trajectory")) {
-    showTrajectory = viz_params["show_trajectory"].as<bool>();
+  if (viz_params_.has("show_trajectory")) {
+    showTrajectory = viz_params_["show_trajectory"].as<bool>();
   }
 
   if (!showTrajectory) {
@@ -161,14 +162,14 @@ void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & upda
   }
 
   // Build path from keyframe poses
-  const auto & values = mapper_state.gtsam_data.graph_values;
+  const auto & values = mapper_state_.gtsam_data.graph_values;
 
   gl_estimated_path_->clear();
 
   bool first = true;
   mrpt::math::TPoint3D lastPt;
 
-  for (const auto & [timestamp, kfId] : mapper_state.time_to_kf_id) {
+  for (const auto & [timestamp, kfId] : mapper_state_.time_to_kf_id) {
     // Get pose from GTSAM values
     if (values.exists(kfId)) {
       try {
@@ -191,17 +192,17 @@ void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & upda
   gl_path_group_->clear();
   gl_path_group_->insert(mrpt::opengl::CSetOfLines::Create(*gl_estimated_path_));
 
-  updateTasks.emplace_back(
+  update_tasks.emplace_back(
     [this]() { visualizer_->update_3d_object("mapper2d/path", gl_path_group_); });
 }
 
-void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & updateTasks)
+void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & update_tasks)
 {
   using gtsam::symbol_shorthand::X;
 
   bool showLocalMap = true;
-  if (viz_params.has("show_local_map")) {
-    showLocalMap = viz_params["show_local_map"].as<bool>();
+  if (viz_params_.has("show_local_map")) {
+    showLocalMap = viz_params_["show_local_map"].as<bool>();
   }
 
   if (!showLocalMap || !local_map_needs_viz_update_) {
@@ -209,8 +210,8 @@ void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & 
   }
 
   int mapUpdateDecimation = 10;
-  if (viz_params.has("map_update_decimation")) {
-    mapUpdateDecimation = viz_params["map_update_decimation"].as<int>();
+  if (viz_params_.has("map_update_decimation")) {
+    mapUpdateDecimation = viz_params_["map_update_decimation"].as<int>();
   }
 
   if (map_update_counter_++ < mapUpdateDecimation) {
@@ -224,26 +225,26 @@ void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & 
   auto glMap = mrpt::opengl::CSetOfObjects::Create();
 
   float pointSize = 3.0f;
-  if (viz_params.has("local_map_point_size")) {
-    pointSize = static_cast<float>(viz_params["local_map_point_size"].as<double>());
+  if (viz_params_.has("local_map_point_size")) {
+    pointSize = static_cast<float>(viz_params_["local_map_point_size"].as<double>());
   }
 
   // Get keyframes around current pose
   auto nearbyKfs = find_nearby_keyframes(50);  // max 50 keyframes
 
   for (const auto & [dist, kfId] : nearbyKfs.distance_to_kf_ids) {
-    const auto & mm = mapper_state.get_keyframe_metric_map(kfId);
+    const auto & mm = mapper_state_.get_keyframe_metric_map(kfId);
     if (!mm) {
       continue;
     }
 
     // Get keyframe pose
-    if (!mapper_state.gtsam_data.graph_values.exists(kfId)) {
+    if (!mapper_state_.gtsam_data.graph_values.exists(kfId)) {
       continue;
     }
 
     try {
-      auto pose = mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(kfId));
+      auto pose = mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(X(kfId));
       mrpt::poses::CPose3D mrptPose(
         pose.x(), pose.y(), pose.z(), pose.rotation().yaw(), pose.rotation().pitch(),
         pose.rotation().roll());
@@ -259,20 +260,20 @@ void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & 
     }
   }
 
-  updateTasks.emplace_back(
+  update_tasks.emplace_back(
     [this, glMap]() { visualizer_->update_3d_object("mapper2d/localmap", glMap); });
 }
 
 void Mapper2D::updateVisualizationTextLabels()
 {
-  if (!gui_.lbKeyframes) {
+  if (gui_.lbKeyframes == nullptr) {
     return;
   }
 
-  gui_.lbKeyframes->setCaption(mrpt::format("Keyframes: %zu", mapper_state.time_to_kf_id.size()));
+  gui_.lbKeyframes->setCaption(mrpt::format("Keyframes: %zu", mapper_state_.time_to_kf_id.size()));
 
   gui_.lbLoopClosures->setCaption(
-    mrpt::format("Graph edges: %zu", mapper_state.gtsam_data.graph_factors.size()));
+    mrpt::format("Graph edges: %zu", mapper_state_.gtsam_data.graph_factors.size()));
 
   // ICP quality from last localization
   gui_.lbIcpQuality->setCaption("ICP quality: --");

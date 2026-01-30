@@ -246,41 +246,64 @@ void SlamMapperState::serialize_from(mrpt::serialization::CArchive & in)
 
 Mapper2D::Mapper2D() { COutputLogger::setLoggerName("Mapper2D"); }
 
+Mapper2D::~Mapper2D()
+{
+  using namespace std::chrono_literals;
+
+  try  // a dtor should never throw
+  {
+    {
+      auto lck = mrpt::lockHelper(is_busy_mtx_);
+      destructor_called_ = true;
+    }
+
+    while (isBusy()) {
+      MRPT_LOG_THROTTLE_WARN(
+        2.0, "Destructor: waiting for remaining tasks on the worker threads...");
+      std::this_thread::sleep_for(100ms);
+    }
+    worker_lidar_.clear();
+
+  } catch (const std::exception & e) {
+    std::cerr << "[~Mapper2D] Exception: " << e.what();
+  }
+}
+
 void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
 {
   MRPT_START
 
-  MCP_LOAD_REQ(cfg, max_icp_search_distance);
-  MCP_LOAD_REQ(cfg, min_icp_quality_odometry);
-  MCP_LOAD_REQ(cfg, min_icp_quality_loop_closure);
-  MCP_LOAD_REQ(cfg, min_icp_quality_keyframe_replacement);
-  MCP_LOAD_REQ(cfg, min_keyframe_age_for_replacement);
-  MCP_LOAD_REQ(cfg, min_topological_distance_for_loop_closure);
-  MCP_LOAD_REQ(cfg, max_lost_without_icp);
-  MCP_LOAD_REQ(cfg, max_time_between_localizations);
-  MCP_LOAD_REQ(cfg, max_translation_between_localizations);
-  MCP_LOAD_REQ_DEG(cfg, max_rotation_between_localizations);
-  MCP_LOAD_OPT(cfg, max_icp_edges_per_localization);
-  MCP_LOAD_REQ(cfg, max_translation_between_keyframes);
-  MCP_LOAD_REQ_DEG(cfg, max_rotation_between_keyframes);
-  MCP_LOAD_REQ(cfg, max_time_for_odometry_edge);
-  MCP_LOAD_OPT(cfg, save_3d_scenes_decimation);
-  MCP_LOAD_OPT(cfg, save_3d_scenes_prefix);
-  MCP_LOAD_OPT(cfg, debug_print_factor_graphs);
-  MCP_LOAD_REQ(cfg, odometry_edge_sigma);
-  MCP_LOAD_REQ(cfg, icp_edge_sigma);
-  MCP_LOAD_REQ(cfg, icp_edge_robust_parameter);
+  YAML_LOAD_MEMBER_REQ(max_icp_search_distance, double);
+  YAML_LOAD_MEMBER_REQ(min_icp_quality_odometry, double);
+  YAML_LOAD_MEMBER_REQ(min_icp_quality_loop_closure, double);
+  YAML_LOAD_MEMBER_REQ(min_icp_quality_keyframe_replacement, double);
+  YAML_LOAD_MEMBER_REQ(min_keyframe_age_for_replacement, double);
+  YAML_LOAD_MEMBER_REQ(min_topological_distance_for_loop_closure, uint32_t);
+  YAML_LOAD_MEMBER_REQ(max_lost_without_icp, double);
+  YAML_LOAD_MEMBER_REQ(max_time_between_localizations, double);
+  YAML_LOAD_MEMBER_REQ(max_translation_between_localizations, double);
+  YAML_LOAD_MEMBER_REQ(max_rotation_between_localizations, double);
+  YAML_LOAD_MEMBER_OPT(max_icp_edges_per_localization, uint32_t);
+  YAML_LOAD_MEMBER_REQ(max_translation_between_keyframes, double);
+  YAML_LOAD_MEMBER_REQ(max_rotation_between_keyframes, double);
+  YAML_LOAD_MEMBER_REQ(max_time_for_odometry_edge, double);
+  YAML_LOAD_MEMBER_OPT(save_3d_scenes_decimation, bool);
+  YAML_LOAD_MEMBER_OPT(save_3d_scenes_prefix, std::string);
+  YAML_LOAD_MEMBER_OPT(debug_print_factor_graphs, bool);
+  YAML_LOAD_MEMBER_REQ(odometry_edge_sigma, double);
+  YAML_LOAD_MEMBER_REQ(icp_edge_sigma, double);
+  YAML_LOAD_MEMBER_REQ(icp_edge_robust_parameter, double);
 
   // Load visualization parameters
   if (cfg.has("visualization")) {
-    viz_params = cfg["visualization"];
+    viz_params_ = cfg["visualization"];
   }
 
-  sensor_labels_for_simplemap = cfg["sensor_labels_for_simplemap"].toStdVector<std::string>();
+  sensor_labels_for_simplemap_ = cfg["sensor_labels_for_simplemap"].toStdVector<std::string>();
 
   {
     MRPT_LOG_INFO("Sensor labels for simplemap:");
-    for (const auto & s : sensor_labels_for_simplemap) {
+    for (const auto & s : sensor_labels_for_simplemap_) {
       MRPT_LOG_INFO_STREAM("  - '" << s << "'");
     }
   }
@@ -290,22 +313,22 @@ void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
     const auto cfg_icp = cfg["icp-lidar-odometry"];
     const auto [icp, params] = mp2p_icp::icp_pipeline_from_yaml(cfg_icp);
 
-    icp_odometry = icp;
-    icp_odometry_params = params;
+    icp_odometry_ = icp;
+    icp_odometry_params_ = params;
 
     if (cfg_icp.has("filters")) {
-      mapper_state.pointcloud_filters =
+      mapper_state_.pointcloud_filters =
         mp2p_icp_filters::filter_pipeline_from_yaml(cfg_icp["filters"]);
     } else {
       MRPT_LOG_WARN("No 'filters' section in YAML config.");
     }
 
     if (cfg_icp.has("generators")) {
-      mapper_state.pointcloud_generators =
+      mapper_state_.pointcloud_generators =
         mp2p_icp_filters::generators_from_yaml(cfg_icp["generators"]);
     } else {
       MRPT_LOG_WARN("No 'generators' section in YAML config, using default.");
-      mapper_state.pointcloud_generators.emplace_back(
+      mapper_state_.pointcloud_generators.emplace_back(
         std::make_shared<mp2p_icp_filters::Generator>());
     }
   }
@@ -315,20 +338,29 @@ void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
     const auto cfg_icp = cfg["icp-lidar-loop-closure"];
     const auto [icp, params] = mp2p_icp::icp_pipeline_from_yaml(cfg_icp);
 
-    icp_loop_closure = icp;
-    icp_loop_closure_params = params;
+    icp_loop_closure_ = icp;
+    icp_loop_closure_params_ = params;
+  }
+
+  // end of initialization:
+  {
+    auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
+
+    state_flags_.initialized = true;
+    //state_flags_.active = params_.start_active; // TODO
   }
 
   MRPT_END
 }
 
+#if 0
 void Mapper2D::process_action_observation(
   const mrpt::obs::CActionCollection & action, const mrpt::obs::CSensoryFrame & observations)
 {
   MRPT_START
 
   ASSERTMSG_(
-    !mapper_state.pointcloud_generators.empty(),
+    !mapper_state_.pointcloud_generators.empty(),
     "pointcloud_generators is empty: did you call initialize()?");
 
   auto tle = mrpt::system::CTimeLoggerEntry(profiler_, "process_action_observation");
@@ -345,13 +377,13 @@ void Mapper2D::process_action_observation(
     const auto icp_edges = run_icp_on_nearby_keyframes(nearby_kfs, relocalize_out);
 
     const bool duplicated_timestamp =
-      mapper_state.time_to_kf_id.hasKey(icp_edges.current_observations_timestamp);
+      mapper_state_.time_to_kf_id.hasKey(icp_edges.current_observations_timestamp);
 
-    if (icp_edges.icp_results.empty() && !mapper_state.empty()) {
+    if (icp_edges.icp_results.empty() && !mapper_state_.empty()) {
       MRPT_LOG_WARN("No valid ICP edges for localization.");
 
       if (
-        mapper_state.accum_odom_since_last_kf.mean.norm() > max_lost_without_icp &&
+        mapper_state_.accum_odom_since_last_kf.mean.norm() > max_lost_without_icp &&
         relocalize_out.current_frame_map->size() > 0 && !duplicated_timestamp) {
         insert_new_keyframe_and_odometry_edge(icp_edges, observations);
         optimize_pose_graph();
@@ -384,9 +416,10 @@ void Mapper2D::process_action_observation(
 
   MRPT_END
 }
+#endif
 
 Mapper2D::RelocalizeCheckOutput Mapper2D::check_needs_relocalization(
-  const mrpt::obs::CActionCollection & action, const mrpt::obs::CSensoryFrame & observations)
+  const mrpt::obs::CSensoryFrame & observations, const mrpt::poses::CPosePDFGaussian & odom_incr)
 {
   MRPT_START
 
@@ -403,56 +436,43 @@ Mapper2D::RelocalizeCheckOutput Mapper2D::check_needs_relocalization(
   MRPT_LOG_DEBUG_FMT(
     "Processing frame at timestamp=%f", mrpt::Clock::toDouble(out.current_frame_timestamp));
 
-  out.current_frame_map = mapper_state.build_metric_map_from_observations(observations);
+  out.current_frame_map = mapper_state_.build_metric_map_from_observations(observations);
 
   if (out.current_frame_map->size() == 0) {
     MRPT_LOG_WARN("Cannot localize: empty observation map (missing sensor data).");
     return out;
   }
 
-  if (mapper_state.empty()) {
+  if (mapper_state_.empty()) {
     MRPT_LOG_DEBUG("Map is empty, starting new SLAM session.");
     out.should_relocalize = true;
     return out;
   }
 
-  const auto rob_mov = action.getActionByClass<mrpt::obs::CActionRobotMovement2D>();
-  if (!rob_mov || !rob_mov->poseChange) {
-    THROW_EXCEPTION("No odometry in action sequence!");
-  }
+  const auto & abs_odo_incr = odom_incr;
 
-  const auto act_odo_incr = rob_mov->poseChange->getMeanVal();
+  mapper_state_.accum_odom_since_last_kf += abs_odo_incr;
+  mapper_state_.accum_odom_since_last_localization += mrpt::poses::CPose3D(abs_odo_incr.mean);
 
-  if (act_odo_incr == mrpt::poses::CPose2D::Identity()) {
-    MRPT_LOG_DEBUG("Robot is stationary, skipping.");
-    return out;
-  }
-
-  mrpt::poses::CPosePDFGaussian abs_odo_incr;
-  abs_odo_incr.copyFrom(*rob_mov->poseChange);
-
-  mapper_state.accum_odom_since_last_kf += abs_odo_incr;
-  mapper_state.accum_odom_since_last_localization += mrpt::poses::CPose3D(abs_odo_incr.mean);
-
-  const double odo_trans = mapper_state.accum_odom_since_last_localization.norm();
-  const double odo_rot = std::abs(mapper_state.accum_odom_since_last_localization.yaw());
+  const double odo_trans = mapper_state_.accum_odom_since_last_localization.norm();
+  const double odo_rot = std::abs(mapper_state_.accum_odom_since_last_localization.yaw());
 
   MRPT_LOG_DEBUG_STREAM(
     "Odometry increment: trans=" << odo_trans << "m, rot=" << mrpt::RAD2DEG(odo_rot) << "deg");
 
   if (
-    odo_trans > max_translation_between_localizations ||
-    odo_rot > max_rotation_between_localizations) {
+    odo_trans > max_translation_between_localizations_ ||
+    odo_rot > max_rotation_between_localizations_) {
     MRPT_LOG_DEBUG("Relocalization triggered by motion threshold.");
     out.should_relocalize = true;
     return out;
   }
 
-  if (mapper_state.last_localization_time.has_value()) {
+  if (mapper_state_.last_localization_time.has_value()) {
     const auto t = observations.getObservationByIndex(0)->getTimeStamp();
-    const double dt = mrpt::system::timeDifference(*mapper_state.last_localization_time, t);
+    const double dt = mrpt::system::timeDifference(*mapper_state_.last_localization_time, t);
 
-    if (dt > max_time_between_localizations) {
+    if (dt > max_time_between_localizations_) {
       MRPT_LOG_DEBUG_STREAM("Relocalization triggered by time threshold (dt=" << dt << "s).");
       out.should_relocalize = true;
       return out;
@@ -472,7 +492,7 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
   mrpt::maps::CSimplePointsMap kf_pts;
   mrpt::containers::bimap<KeyFrameID, size_t> kf2pt_idx;
 
-  for (const auto & kv : mapper_state.gtsam_data.graph_values) {
+  for (const auto & kv : mapper_state_.gtsam_data.graph_values) {
     const auto s = gtsam::Symbol(kv.key);
     if (s.chr() != 'x') {
       continue;
@@ -493,15 +513,15 @@ Mapper2D::NearbyKeyFramesOutput Mapper2D::find_nearby_keyframes(
   kf_pts.kdTreeEnsureIndexBuilt2D();
 
   const auto cur_pose = this->get_current_pose();
-  const auto last_kf_id = mapper_state.last_kf_id();
-  const auto topological_ball = mapper_state.get_keyframes_in_topological_radius(
-    last_kf_id, min_topological_distance_for_loop_closure);
+  const auto last_kf_id = mapper_state_.last_kf_id();
+  const auto topological_ball = mapper_state_.get_keyframes_in_topological_radius(
+    last_kf_id, min_topological_distance_for_loop_closure_);
 
   std::vector<nanoflann::ResultItem<size_t, float>> neighbors;
 
   kf_pts.kdTreeRadiusSearch2D(
     mrpt::d2f(cur_pose.x()), mrpt::d2f(cur_pose.y()),
-    mrpt::d2f(mrpt::square(max_icp_search_distance)), neighbors);
+    mrpt::d2f(mrpt::square(max_icp_search_distance_)), neighbors);
 
   {
     std::random_device rd;
@@ -543,7 +563,7 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
 
   ASSERT_(!ret.current_observations->empty());
 
-  const auto tentative_kf_id = mapper_state.generate_new_kf_id();
+  const auto tentative_kf_id = mapper_state_.generate_new_kf_id();
   ret.current_observations->id = tentative_kf_id;
 
   const auto & pc_local = *ret.current_observations;
@@ -553,14 +573,14 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
 
     const auto other_pose = mrpt::poses::CPose3D(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(other_id))));
+        mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(X(other_id))));
 
     const auto rel_pose = cur_pose - other_pose;
 
     const bool is_loop_closure = (nearby_kfs.kfs_in_topological_ball.count(other_id) == 0) &&
-                                 !mapper_state.get_kf_connectivity().edges.empty();
+                                 !mapper_state_.get_kf_connectivity().edges.empty();
 
-    const auto & pc_global = *mapper_state.get_keyframe_metric_map(other_id);
+    const auto & pc_global = *mapper_state_.get_keyframe_metric_map(other_id);
 
     MRPT_LOG_DEBUG_STREAM(
       "ICP: local_pc=" << pc_local.size()
@@ -575,13 +595,13 @@ Mapper2D::ICPEdgesOutput Mapper2D::run_icp_on_nearby_keyframes(
     double min_quality = 0;
 
     if (!is_loop_closure) {
-      min_quality = min_icp_quality_odometry;
-      icp_odometry->align(
-        pc_local, pc_global, rel_pose.asTPose(), icp_odometry_params, icp_results);
+      min_quality = min_icp_quality_odometry_;
+      icp_odometry_->align(
+        pc_local, pc_global, rel_pose.asTPose(), icp_odometry_params_, icp_results);
     } else {
-      min_quality = min_icp_quality_loop_closure;
-      icp_loop_closure->align(
-        pc_local, pc_global, rel_pose.asTPose(), icp_loop_closure_params, icp_results);
+      min_quality = min_icp_quality_loop_closure_;
+      icp_loop_closure_->align(
+        pc_local, pc_global, rel_pose.asTPose(), icp_loop_closure_params_, icp_results);
     }
 
     MRPT_LOG_DEBUG_STREAM(
@@ -610,74 +630,74 @@ void Mapper2D::insert_new_keyframe_and_odometry_edge(
   std::optional<KeyFrameID> last_kf_id;
   bool is_first_kf = false;
 
-  if (mapper_state.empty()) {
+  if (mapper_state_.empty()) {
     initial_pose_guess = mrpt::poses::CPose3D::Identity();
     is_first_kf = true;
   } else {
-    last_kf_id = mapper_state.last_kf_id();
+    last_kf_id = mapper_state_.last_kf_id();
     const auto last_pose = mrpt::poses::CPose3D(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(*last_kf_id))));
+        mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(X(*last_kf_id))));
 
     initial_pose_guess = get_current_pose();
   }
 
-  const auto kf_id = mapper_state.generate_new_kf_id();
+  const auto kf_id = mapper_state_.generate_new_kf_id();
 
   MRPT_LOG_INFO_STREAM("Inserting new keyframe #" << kf_id);
 
   ASSERT_EQUAL_(kf_id, *icp_edges_out.current_observations->id);
 
-  mapper_state.gtsam_data.graph_values.insert(
+  mapper_state_.gtsam_data.graph_values.insert(
     X(kf_id), mrpt::gtsam_wrappers::toPose3(initial_pose_guess));
 
   if (is_first_kf) {
     auto prior_noise = gtsam::noiseModel::Isotropic::Sigma(6, 1.0);
-    mapper_state.gtsam_data.graph_factors.addPrior(
+    mapper_state_.gtsam_data.graph_factors.addPrior(
       X(kf_id), mrpt::gtsam_wrappers::toPose3(initial_pose_guess), prior_noise);
   }
 
-  mapper_state.time_to_kf_id.insert(obs_time, kf_id);
+  mapper_state_.time_to_kf_id.insert(obs_time, kf_id);
 
   {
-    auto & sf = mapper_state.keyframe_observations[kf_id];
-    for (const auto & label : sensor_labels_for_simplemap) {
+    auto & sf = mapper_state_.keyframe_observations[kf_id];
+    for (const auto & label : sensor_labels_for_simplemap_) {
       if (auto obs = observations.getObservationBySensorLabel(label); obs) {
         sf.insert(obs);
       }
     }
   }
 
-  mapper_state.set_keyframe_metric_map(kf_id, icp_edges_out.current_observations);
+  mapper_state_.set_keyframe_metric_map(kf_id, icp_edges_out.current_observations);
 
   if (
     last_kf_id.has_value() &&
     std::abs(
-      mrpt::system::timeDifference(mapper_state.time_to_kf_id.inverse(*last_kf_id), obs_time)) <
-      max_time_for_odometry_edge) {
+      mrpt::system::timeDifference(mapper_state_.time_to_kf_id.inverse(*last_kf_id), obs_time)) <
+      max_time_for_odometry_edge_) {
     mrpt::poses::CPose3DPDFGaussianInf odometry_edge;
-    odometry_edge.mean = mrpt::poses::CPose3D(mapper_state.accum_odom_since_last_kf.mean);
+    odometry_edge.mean = mrpt::poses::CPose3D(mapper_state_.accum_odom_since_last_kf.mean);
 
     gtsam::Matrix6 odo_cov = gtsam::Matrix6::Zero();
-    odo_cov(0, 0) = odo_cov(1, 1) = odo_cov(2, 2) =
-      mrpt::square(std::max(odometry_edge_sigma, mapper_state.accum_odom_since_last_kf.cov(2, 2)));
-    odo_cov(3, 3) =
-      mrpt::square(std::max(odometry_edge_sigma, mapper_state.accum_odom_since_last_kf.cov(0, 0)));
-    odo_cov(4, 4) =
-      mrpt::square(std::max(odometry_edge_sigma, mapper_state.accum_odom_since_last_kf.cov(1, 1)));
-    odo_cov(5, 5) = mrpt::square(odometry_edge_sigma);
+    odo_cov(0, 0) = odo_cov(1, 1) = odo_cov(2, 2) = mrpt::square(
+      std::max(odometry_edge_sigma_, mapper_state_.accum_odom_since_last_kf.cov(2, 2)));
+    odo_cov(3, 3) = mrpt::square(
+      std::max(odometry_edge_sigma_, mapper_state_.accum_odom_since_last_kf.cov(0, 0)));
+    odo_cov(4, 4) = mrpt::square(
+      std::max(odometry_edge_sigma_, mapper_state_.accum_odom_since_last_kf.cov(1, 1)));
+    odo_cov(5, 5) = mrpt::square(odometry_edge_sigma_);
 
     auto odo_noise = gtsam::noiseModel::Gaussian::Covariance(odo_cov);
 
-    mapper_state.gtsam_data.graph_factors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
+    mapper_state_.gtsam_data.graph_factors.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       X(*last_kf_id), X(kf_id), mrpt::gtsam_wrappers::toPose3(odometry_edge.mean), odo_noise);
 
-    mapper_state.add_kf_connectivity(*last_kf_id, kf_id);
+    mapper_state_.add_kf_connectivity(*last_kf_id, kf_id);
 
     MRPT_LOG_DEBUG_STREAM("Added odometry edge: KF#" << *last_kf_id << " -> KF#" << kf_id);
   }
 
-  mapper_state.accum_odom_since_last_kf = {
+  mapper_state_.accum_odom_since_last_kf = {
     mrpt::poses::CPose2D::Identity(), mrpt::math::CMatrixDouble33::Zero()};
 }
 
@@ -689,7 +709,7 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
 
   LocalizationOutput ret;
 
-  const auto tentative_kf_id = mapper_state.generate_new_kf_id();
+  const auto tentative_kf_id = mapper_state_.generate_new_kf_id();
   auto prior_noise = gtsam::noiseModel::Isotropic::Sigma(6, 1e-3);
 
   gtsam::NonlinearFactorGraph fg_edges;
@@ -700,13 +720,13 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
     auto icp_edge = mrpt::poses::CPose3DPDFGaussianInf(
       icp_result.optimal_tf.mean, icp_result.optimal_tf.cov.inverse_LLt());
 
-    auto icp_noise = gtsam::noiseModel::Isotropic::Sigma(6, icp_edge_sigma);
+    auto icp_noise = gtsam::noiseModel::Isotropic::Sigma(6, icp_edge_sigma_);
 
     gtsam::noiseModel::Base::shared_ptr icp_rob_noise;
 
-    if (icp_edge_robust_parameter > 0) {
+    if (icp_edge_robust_parameter_ > 0) {
       icp_rob_noise = gtsam::noiseModel::Robust::Create(
-        gtsam::noiseModel::mEstimator::Fair::Create(icp_edge_robust_parameter), icp_noise);
+        gtsam::noiseModel::mEstimator::Fair::Create(icp_edge_robust_parameter_), icp_noise);
     } else {
       icp_rob_noise = icp_noise;
     }
@@ -714,7 +734,7 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
     fg_edges.emplace_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
       X(kf_id), X(tentative_kf_id), mrpt::gtsam_wrappers::toPose3(icp_edge.mean), icp_rob_noise);
 
-    const auto kf_pose = mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id));
+    const auto kf_pose = mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id));
     fg.addPrior(X(kf_id), kf_pose, prior_noise);
 
     values.insert(X(kf_id), kf_pose);
@@ -737,13 +757,13 @@ Mapper2D::LocalizationOutput Mapper2D::run_localization_step(const ICPEdgesOutpu
 
   const auto cur_optimal_pose = optimal_values.at<gtsam::Pose3>(X(tentative_kf_id));
 
-  mapper_state.last_localization =
+  mapper_state_.last_localization =
     mrpt::poses::CPose3D(mrpt::gtsam_wrappers::toTPose3D(cur_optimal_pose));
-  mapper_state.last_localization_time = icp_edges.current_observations_timestamp;
+  mapper_state_.last_localization_time = icp_edges.current_observations_timestamp;
 
-  mapper_state.accum_odom_since_last_localization = mrpt::poses::CPose3D::Identity();
+  mapper_state_.accum_odom_since_last_localization = mrpt::poses::CPose3D::Identity();
 
-  MRPT_LOG_DEBUG_STREAM("Localization updated: pose=" << mapper_state.last_localization);
+  MRPT_LOG_DEBUG_STREAM("Localization updated: pose=" << mapper_state_.last_localization);
 
   ret.factor_graph_edges = fg_edges;
   ret.tentative_new_kf_id = tentative_kf_id;
@@ -755,10 +775,10 @@ void Mapper2D::add_icp_edges_to_graph(const LocalizationOutput & loc_out)
 {
   using gtsam::symbol_shorthand::X;
 
-  mapper_state.gtsam_data.graph_factors += loc_out.factor_graph_edges;
-  mapper_state.add_kf_connectivity_from_factor_graph(loc_out.factor_graph_edges);
+  mapper_state_.gtsam_data.graph_factors += loc_out.factor_graph_edges;
+  mapper_state_.add_kf_connectivity_from_factor_graph(loc_out.factor_graph_edges);
 
-  mapper_state.gtsam_data.graph_values.update(
+  mapper_state_.gtsam_data.graph_values.update(
     X(loc_out.tentative_new_kf_id), mrpt::gtsam_wrappers::toPose3(get_current_pose()));
 }
 
@@ -779,17 +799,17 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
 
   for (const auto & [other_kf_id, icp_edge] : icp_edges.icp_results) {
     {
-      if (icp_edge.quality < min_icp_quality_keyframe_replacement) {
+      if (icp_edge.quality < min_icp_quality_keyframe_replacement_) {
         continue;
       }
     }
 
     const auto & rel_pose_old_to_cur = icp_edge.optimal_tf.mean;
     const double other_kf_time =
-      mrpt::Clock::toDouble(mapper_state.time_to_kf_id.inverse(other_kf_id));
+      mrpt::Clock::toDouble(mapper_state_.time_to_kf_id.inverse(other_kf_id));
 
     const double age = cur_kf_time - other_kf_time;
-    if (age < min_keyframe_age_for_replacement) {
+    if (age < min_keyframe_age_for_replacement_) {
       continue;
     }
 
@@ -806,7 +826,7 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
 
     gtsam::NonlinearFactorGraph new_factors;
 
-    for (auto & f : mapper_state.gtsam_data.graph_factors) {
+    for (auto & f : mapper_state_.gtsam_data.graph_factors) {
       if (const auto * prior_factor =
             dynamic_cast<const gtsam::PriorFactor<gtsam::Pose3> *>(f.get());
           prior_factor) {
@@ -817,7 +837,7 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
           continue;
         }
 
-        gtsam::Pose3 new_prior_pose = mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(key1) *
+        gtsam::Pose3 new_prior_pose = mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(key1) *
                                       mrpt::gtsam_wrappers::toPose3(rel_pose_old_to_cur);
 
         auto new_prior = boost::make_shared<gtsam::PriorFactor<gtsam::Pose3>>(
@@ -856,11 +876,11 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
         const auto new_edge_rel_pose =
           mrpt::gtsam_wrappers::toPose3(rel_pose_old_to_cur).inverse() * old_to_new_other;
 
-        if (new_edge_rel_pose.translation().norm() < max_icp_search_distance) {
+        if (new_edge_rel_pose.translation().norm() < max_icp_search_distance_) {
           auto new_edge = boost::make_shared<gtsam::BetweenFactor<gtsam::Pose3>>(
             X(cur_kf_id), X(*new_other_kf_id), new_edge_rel_pose, between_factor->noiseModel());
 
-          mapper_state.add_kf_connectivity(cur_kf_id, *new_other_kf_id);
+          mapper_state_.add_kf_connectivity(cur_kf_id, *new_other_kf_id);
           new_factors += new_edge;
         }
 
@@ -868,7 +888,7 @@ bool Mapper2D::try_replace_old_keyframes(  // NOLINT
       }
     }
 
-    mapper_state.gtsam_data.graph_factors += new_factors;
+    mapper_state_.gtsam_data.graph_factors += new_factors;
     internal_delete_keyframe(other_kf_id);
   }
 
@@ -882,7 +902,7 @@ void Mapper2D::optimize_pose_graph()
   auto lm_params = gtsam::LevenbergMarquardtParams::LegacyDefaults();
   lm_params.maxIterations = 100;
 
-  const auto n_factors = mapper_state.gtsam_data.graph_factors.size();
+  const auto n_factors = mapper_state_.gtsam_data.graph_factors.size();
   const auto n_factors_1 = n_factors > 0 ? 1.0 / static_cast<double>(n_factors) : 1.0;
 
   lm_params.iterationHook = [n_factors_1](size_t iter, double err_init, double err_final) {
@@ -891,22 +911,22 @@ void Mapper2D::optimize_pose_graph()
   };
 
   auto optimizer = gtsam::LevenbergMarquardtOptimizer(
-    mapper_state.gtsam_data.graph_factors, mapper_state.gtsam_data.graph_values, lm_params);
+    mapper_state_.gtsam_data.graph_factors, mapper_state_.gtsam_data.graph_values, lm_params);
 
-  if (debug_print_factor_graphs) {
-    mapper_state.gtsam_data.graph_factors.print();
-    mapper_state.gtsam_data.graph_values.print();
+  if (debug_print_factor_graphs_) {
+    mapper_state_.gtsam_data.graph_factors.print();
+    mapper_state_.gtsam_data.graph_values.print();
   }
 
   const auto & optimal_values = optimizer.optimize();
-  mapper_state.gtsam_data.graph_values = optimal_values;
+  mapper_state_.gtsam_data.graph_values = optimal_values;
 }
 
 mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 {
   using namespace std::string_literals;
 
-  auto lck = mrpt::lockHelper(state_mutex);
+  auto lck = mrpt::lockHelper(state_mtx_);
 
   auto gl_map = mrpt::opengl::CSetOfObjects::Create();
 
@@ -917,7 +937,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   gl_edges->setColor_u8(0x00, 0x00, 0xff, 0x60);
 
   // Keyframe poses
-  for (const auto & kv : mapper_state.gtsam_data.graph_values) {
+  for (const auto & kv : mapper_state_.gtsam_data.graph_values) {
     const auto key = kv.key;
     const auto pose = mrpt::gtsam_wrappers::toTPose3D(kv.value.cast<gtsam::Pose3>());
 
@@ -929,16 +949,16 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   }
 
   // Edges
-  for (const auto & f : mapper_state.gtsam_data.graph_factors) {
+  for (const auto & f : mapper_state_.gtsam_data.graph_factors) {
     const auto * between_fac = dynamic_cast<const gtsam::BetweenFactor<gtsam::Pose3> *>(f.get());
     if (between_fac == nullptr) {
       continue;
     }
 
     const auto key1 = mrpt::gtsam_wrappers::toTPose3D(
-      mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key1()));
+      mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key1()));
     const auto key2 = mrpt::gtsam_wrappers::toTPose3D(
-      mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key2()));
+      mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(between_fac->key2()));
 
     gl_edges->appendLine(key1.translation(), key2.translation());
   }
@@ -947,11 +967,11 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   gl_map->insert(gl_pose_graph);
 
   // Point clouds
-  for (const auto & kv : mapper_state.time_to_kf_id.getDirectMap()) {
+  for (const auto & kv : mapper_state_.time_to_kf_id.getDirectMap()) {
     const auto kf_id = kv.second;
-    const auto & pc = mapper_state.get_keyframe_metric_map(kf_id);
+    const auto & pc = mapper_state_.get_keyframe_metric_map(kf_id);
 
-    auto & gl_pts = cached_viz_point_clouds[kf_id];
+    auto & gl_pts = cached_viz_point_clouds_[kf_id];
     if (!gl_pts) {
       mp2p_icp::render_params_t rp;
       auto & color_mode = rp.points.allLayers.colorMode.emplace();
@@ -966,7 +986,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
     using gtsam::symbol_shorthand::X;
     gl_pts->setPose(
       mrpt::gtsam_wrappers::toTPose3D(
-        mapper_state.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id))));
+        mapper_state_.gtsam_data.graph_values.at<gtsam::Pose3>(X(kf_id))));
 
     gl_map->insert(gl_pts);
   }
@@ -974,15 +994,15 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
   // Localization poses
   {
     auto gl_loc_pose = mrpt::opengl::stock_objects::CornerXYZ(1.5f);
-    gl_loc_pose->setPose(mapper_state.last_localization);
+    gl_loc_pose->setPose(mapper_state_.last_localization);
     gl_map->insert(gl_loc_pose);
   }
 
   {
     auto gl_cur_pose = mrpt::opengl::stock_objects::CornerXYZ(2.0f);
     gl_cur_pose->setPose(
-      mapper_state.last_localization +
-      mapper_state.accum_odom_since_last_localization.getPoseMean());
+      mapper_state_.last_localization +
+      mapper_state_.accum_odom_since_last_localization.getPoseMean());
     gl_map->insert(gl_cur_pose);
   }
 
@@ -998,31 +1018,31 @@ void Mapper2D::save_state_to_3d_scene(const std::string & filename) const
 
 mrpt::poses::CPose3D Mapper2D::get_current_pose() const
 {
-  auto lck = mrpt::lockHelper(state_mutex);
+  auto lck = mrpt::lockHelper(state_mtx_);
 
-  const auto cur_pose_estimate =
-    mapper_state.last_localization + mapper_state.accum_odom_since_last_localization.getPoseMean();
+  const auto cur_pose_estimate = mapper_state_.last_localization +
+                                 mapper_state_.accum_odom_since_last_localization.getPoseMean();
 
   return cur_pose_estimate;
 }
 
 mrpt::maps::CSimpleMap Mapper2D::get_current_map() const
 {
-  auto lck = mrpt::lockHelper(state_mutex);
-  return mapper_state.as_simple_map();
+  auto lck = mrpt::lockHelper(state_mtx_);
+  return mapper_state_.as_simple_map();
 }
 
 void Mapper2D::resume_session(const mrpt::poses::CPose3D & current_pose)
 {
-  mapper_state.accum_odom_since_last_kf = {
+  mapper_state_.accum_odom_since_last_kf = {
     mrpt::poses::CPose2D::Identity(), mrpt::math::CMatrixDouble33::Zero()};
-  mapper_state.accum_odom_since_last_localization = mrpt::poses::CPose3D::Identity();
+  mapper_state_.accum_odom_since_last_localization = mrpt::poses::CPose3D::Identity();
 
-  mapper_state.last_localization = current_pose;
-  mapper_state.last_localization_time = mrpt::Clock::now();
+  mapper_state_.last_localization = current_pose;
+  mapper_state_.last_localization_time = mrpt::Clock::now();
 }
 
-void Mapper2D::internal_delete_keyframe(KeyFrameID kf_id) { mapper_state.delete_keyframe(kf_id); }
+void Mapper2D::internal_delete_keyframe(KeyFrameID kf_id) { mapper_state_.delete_keyframe(kf_id); }
 
 void Mapper2D::save_debug_visualization_if_enabled()
 {
@@ -1030,14 +1050,14 @@ void Mapper2D::save_debug_visualization_if_enabled()
   static thread_local int save_cnt = 0;
 
   if (
-    save_3d_scenes_decimation > 0 && !mapper_state.empty() &&
-    ++save_scene_cnt >= save_3d_scenes_decimation) {
+    save_3d_scenes_decimation_ > 0 && !mapper_state_.empty() &&
+    ++save_scene_cnt >= save_3d_scenes_decimation_) {
     save_scene_cnt = 0;
 
     save_state_to_3d_scene(
-      save_3d_scenes_prefix +
+      save_3d_scenes_prefix_ +
       mrpt::format(
-        "_%05u_KF%05u.3Dscene", save_cnt++, static_cast<unsigned int>(mapper_state.last_kf_id())));
+        "_%05u_KF%05u.3Dscene", save_cnt++, static_cast<unsigned int>(mapper_state_.last_kf_id())));
   }
 }
 
@@ -1074,84 +1094,6 @@ void Mapper2D::spinOnce()
   // Publish optional regular diagnostics:
   if (module_is_time_to_publish_diagnostics()) {
     onPublishDiagnostics();
-  }
-#endif
-
-  MRPT_TRY_END
-}
-
-void Mapper2D::onNewObservation(const CObservation::ConstPtr & o)
-{
-  MRPT_TRY_START
-  const ProfilerEntry tle(profiler_, "onNewObservation");
-
-  ASSERT_(o);
-
-  THROW_EXCEPTION("Continue here!");
-  //   this->process_action_observation(const mrpt::obs::CActionCollection &action, const mrpt::obs::CSensoryFrame &observations)
-
-#if 0
-  {
-    auto lckStateFlags = mrpt::lockHelper(state_flags_mtx_);
-
-    if (!state_.initialized) {
-      MRPT_LOG_THROTTLE_ERROR(
-        2.0,
-        "Discarding incoming observations: the system initialize() method has not been called "
-        "yet!");
-      return;
-    }
-    if (state_.fatal_error) {
-      MRPT_LOG_THROTTLE_ERROR(
-        2.0, "Discarding incoming observations: a fatal error ocurred above.");
-
-      this->requestShutdown();  // request end of mola-cli app, if applicable
-      return;
-    }
-
-    // SLAM enabled?
-    if (!state_.active) {
-      // and do not process the observation:
-      return;
-    }
-  }
-
-  // Is it an IMU obs?
-  if (
-    params_.imu_sensor_label &&
-    std::regex_match(o->sensorLabel, params_.imu_sensor_label.value())) {
-    {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_others++;
-    }
-
-    // Yes, it's an IMU obs:
-    auto fut = worker_others_.enqueue(&LidarOdometry::onIMU, this, o);
-    (void)fut;
-  }
-
-  // Is it GNSS?
-  if (
-    params_.gnss_sensor_label &&
-    std::regex_match(o->sensorLabel, params_.gnss_sensor_label.value())) {
-    {
-      auto lck = mrpt::lockHelper(is_busy_mtx_);
-      state_.worker_tasks_others++;
-    }
-    auto fut = worker_others_.enqueue(&LidarOdometry::onGPS, this, o);
-    (void)fut;
-  }
-
-  // Is it a LIDAR obs?
-  for (const auto & re : params_.lidar_sensor_labels) {
-    if (!std::regex_match(o->sensorLabel, re)) {
-      continue;
-    }
-
-    // Yes, it's a LIDAR obs:
-    sendLidarScanToProcessQueue(o);
-
-    break;  // do not keep processing the list
   }
 #endif
 
