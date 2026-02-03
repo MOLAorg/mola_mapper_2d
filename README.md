@@ -8,6 +8,15 @@
 2D LiDAR Graph-SLAM backend component based on the MOLA and MRPT frameworks,
 compatible with ROS 2.
 
+
+| Distro | Develop Branch | Releases | Stable Release |
+| ---    | ---            | ---      |  ---           |
+| ROS2 Humble (u22.04) | [![Build Status](https://build.ros2.org/job/Hdev__mola_mapper_2d__ubuntu_jammy_amd64/badge/icon)](https://build.ros2.org/job/Hdev__mola_mapper_2d__ubuntu_jammy_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_2d__ubuntu_jammy_amd64__binary/badge/icon)](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_2d__ubuntu_jammy_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_2d__ubuntu_jammy_arm64__binary/badge/icon)](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_2d__ubuntu_jammy_arm64__binary/) | [![Version](https://img.shields.io/ros/v/humble/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
+| ROS 2 Jazzy (u24.04) | [![Build Status](https://build.ros2.org/job/Jdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Jdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Jbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Jbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/jazzy/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
+| ROS 2 Kilted (u24.04) | [![Build Status](https://build.ros2.org/job/Kdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Kdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Kbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Kbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/kilted/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
+| ROS 2 Rolling (u24.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Rbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Rbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Rbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Rbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/rolling/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
+
+
 ## Overview
 
 This repository provides a C++ library `mola_mapper_2d` implementing a complete 2D LiDAR 
@@ -74,7 +83,7 @@ mola::Mapper2D mapper;
 mapper.initialize("config.yaml");
 
 // Process observations in a loop
-mapper.process_action_observation(action, observations);
+mapper.onObservation(observation);
 
 // Get current estimates
 auto pose = mapper.get_current_pose();
@@ -86,51 +95,6 @@ auto state = mapper.get_state();
 
 // Resume from saved state
 mapper.resume_session(saved_pose);
-```
-
-### YAML Configuration
-
-```yaml
-# ICP quality thresholds
-min_icp_quality_odometry: 0.30
-min_icp_quality_loop_closure: 0.60
-
-# Distance thresholds
-max_icp_search_distance: 3.0
-max_translation_between_keyframes: 0.5
-max_rotation_between_keyframes: 20.0  # degrees
-
-# Loop closure detection
-min_topological_distance_for_loop_closure: 20
-
-# Localization frequency
-max_time_between_localizations: 5.0
-max_translation_between_localizations: 0.5
-max_rotation_between_localizations: 20.0  # degrees
-
-# Edge uncertainty models
-odometry_edge_sigma: 0.10
-icp_edge_sigma: 0.10
-icp_edge_robust_parameter: 10.0
-
-# Sensor labels for output maps
-sensor_labels_for_simplemap: ["lidar"]
-
-# ICP pipeline for odometry
-icp-lidar-odometry:
-  method: "mp2p_icp_filters::ICP_CERES"
-  filters:
-    - filter_name: "voxel_grid"
-      voxel_size: 0.05
-  generators:
-    - generator_name: "raw"
-
-# ICP pipeline for loop closures
-icp-lidar-loop-closure:
-  method: "mp2p_icp_filters::ICP_CERES"
-  filters:
-    - filter_name: "voxel_grid"
-      voxel_size: 0.10
 ```
 
 ## Architecture
@@ -164,15 +128,6 @@ Main SLAM backend implementation:
 
 For comprehensive documentation, tutorials, and examples, see:
 https://docs.mola-slam.org/
-
-## ROS Build Farm Status
-
-| Distro | Develop Branch | Releases | Stable Release |
-| ---    | ---            | ---      |  ---           |
-| ROS2 Humble (u22.04) | [![Build Status](https://build.ros2.org/job/Hdev__mola_mapper_2d__ubuntu_jammy_amd64/badge/icon)](https://build.ros2.org/job/Hdev__mola_mapper_2d__ubuntu_jammy_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_2d__ubuntu_jammy_amd64__binary/badge/icon)](https://build.ros2.org/job/Hbin_uJ64__mola_mapper_2d__ubuntu_jammy_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_2d__ubuntu_jammy_arm64__binary/badge/icon)](https://build.ros2.org/job/Hbin_ujv8_uJv8__mola_mapper_2d__ubuntu_jammy_arm64__binary/) | [![Version](https://img.shields.io/ros/v/humble/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
-| ROS 2 Jazzy (u24.04) | [![Build Status](https://build.ros2.org/job/Jdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Jdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Jbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Jbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Jbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/jazzy/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
-| ROS 2 Kilted (u24.04) | [![Build Status](https://build.ros2.org/job/Kdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Kdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Kbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Kbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Kbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/kilted/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
-| ROS 2 Rolling (u24.04) | [![Build Status](https://build.ros2.org/job/Rdev__mola_mapper_2d__ubuntu_noble_amd64/badge/icon)](https://build.ros2.org/job/Rdev__mola_mapper_2d__ubuntu_noble_amd64/) | amd64 [![Build Status](https://build.ros2.org/job/Rbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/badge/icon)](https://build.ros2.org/job/Rbin_uN64__mola_mapper_2d__ubuntu_noble_amd64__binary/) <br> arm64 [![Build Status](https://build.ros2.org/job/Rbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/badge/icon)](https://build.ros2.org/job/Rbin_unv8_uNv8__mola_mapper_2d__ubuntu_noble_arm64__binary/) | [![Version](https://img.shields.io/ros/v/rolling/mola_mapper_2d)](https://index.ros.org/?search_packages=true&pkgs=mola_mapper_2d) |
 
 ## Performance Characteristics
 
