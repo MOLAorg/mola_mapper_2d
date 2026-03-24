@@ -209,3 +209,5 @@ Contributions are welcome! Please follow the MOLA project guidelines:
 - Update documentation accordingly
 
 For major changes, please open an issue first to discuss proposed changes.
+
+Contributions require acceptance of the Contributor License Agreement (CLA).
