@@ -23,8 +23,8 @@
   <depend>gtsam</depend>
   <depend>gtsam2mrpt_serial</depend>
 
-  <depend>mrpt_libtclap</depend>
-  <depend>mrpt_libmaps</depend>
+  <depend>cli11</depend>
+  <depend>mrpt_maps</depend>
 
   <!-- dataset input sources (all are actually optional) -->
   <depend>mola_input_rawlog</depend>

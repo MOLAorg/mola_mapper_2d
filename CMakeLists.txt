@@ -21,8 +21,8 @@ project(mola_mapper_2d LANGUAGES CXX)
 find_package(mola_common REQUIRED)
 
 # find dependencies:
-find_package(mrpt-maps REQUIRED)
-find_package(mrpt-tclap REQUIRED)
+find_package(mrpt_maps REQUIRED)
+find_package(CLI11 REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
 find_package(mp2p_icp REQUIRED)
@@ -48,7 +48,7 @@ mola_add_library(
   SOURCES ${LIB_SOURCES} ${LIB_PUBLIC_HEADERS}
   PUBLIC_LINK_LIBRARIES
     gtsam
-    mrpt::maps
+    mrpt::mrpt_maps
     mola::mola_kernel
     mola::mola_yaml
     mola::mp2p_icp
@@ -90,8 +90,8 @@ mola_add_executable(
   SOURCES apps/mola-mapper-2d-cli.cpp
   LINK_LIBRARIES
   ${PROJECT_NAME}
-  mrpt::maps
-  mrpt::tclap
+  mrpt::mrpt_maps
+  CLI11::CLI11
 )
 if(mola_state_estimation_simple_FOUND)
   message(STATUS "mola-mapper-2d-cli: With mola_state_estimation_simple = YES")

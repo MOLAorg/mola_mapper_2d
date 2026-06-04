@@ -27,7 +27,6 @@
 #include <mola_kernel/interfaces/OfflineDatasetSource.h>
 #include <mola_kernel/pretty_print_exception.h>
 #include <mola_yaml/yaml_helpers.h>
-#include <mrpt/3rdparty/tclap/CmdLine.h>
 #include <mrpt/core/Clock.h>
 #include <mrpt/core/exceptions.h>
 #include <mrpt/obs/CObservation2DRangeScan.h>
@@ -42,6 +41,7 @@
 #include <mrpt/system/filesystem.h>
 #include <mrpt/system/os.h>
 #include <mrpt/system/progress.h>
+#include <CLI/CLI.hpp>
 
 #include <memory>
 
@@ -64,133 +64,50 @@
 
 struct Cli
 {
-  // Declare supported cli switches ===========
-  TCLAP::CmdLine cmd{"mola-mapper-2d-cli"};
+  CLI::App app{"mola-mapper-2d-cli"};
 
-  TCLAP::ValueArg<std::string> argYAML{
-    "c", "config", "Input pipeline YAML config file (required) (*.yml)", true, "", "lidar2d.yaml",
-    cmd};
+  std::string argYAML;
+  std::string arg_verbosity_level;
+  std::string arg_plugins;
+  std::string arg_stateEstimatorClass;
+  std::string arg_stateEstimatorParams;
+  std::string arg_outTwist;
+  std::string arg_outSimpleMap;
+  int arg_firstN{0};
+  int arg_skipFirstN{0};
+  std::string arg_lidarLabel;
+  std::string arg_imuLabel;
+  std::string arg_baseLinkName{"base_link"};
 
-  TCLAP::ValueArg<std::string> arg_verbosity_level{
-    "v",    "verbosity", "Verbosity level: ERROR|WARN|INFO|DEBUG {Default: INFO}", false, "",
-    "INFO", cmd};
-
-  TCLAP::ValueArg<std::string> arg_plugins{
-    "l",   "load-plugins", "One or more {comma separated} *.so files to load as plugins",
-    false, "foobar.so",    "foobar.so",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_stateEstimatorClass{
-    "",
-    "state-estimator",
-    "The C++ class name of the state estimator to use",
-    false,
-    "(StateEstimationSimple|StateEstimationSmoother)",
-    "(StateEstimationSimple|StateEstimationSmoother)",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_stateEstimatorParams{
-    "",
-    "state-estimator-param-file",
-    "Path to YAML parameters file to configure the state estimator.",
-    false,
-    "/path/to/params.yaml",
-    "/path/to/params.yaml",
-    cmd};
-
-#if 0
-  TCLAP::ValueArg<std::string> arg_outPath{
-    "",
-    "output-tum-path",
-    "Save the estimated path as a TXT file using the TUM file format {see evo "
-    "docs}",
-    false,
-    "output-trajectory.txt",
-    "output-trajectory.txt",
-    cmd};
-#endif
-
-  TCLAP::ValueArg<std::string> arg_outTwist{
-    "",    "output-twist",     "Save the estimated twist as a TXT file",
-    false, "output-twist.txt", "output-twist.txt",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_outSimpleMap{
-    "",
-    "output-simplemap",
-    "Enables building and saving the simplemap for the mapping session",
-    false,
-    "output-map.simplemap",
-    "output-map.simplemap",
-    cmd};
-
-  TCLAP::ValueArg<int> arg_firstN{
-    "",
-    "only-first-n",
-    "Run for the first N steps only {0=default, not used}",
-    false,
-    0,
-    "Number of dataset entries to run",
-    cmd};
-
-  TCLAP::ValueArg<int> arg_skipFirstN{
-    "",
-    "skip-first-n",
-    "Skip the first N dataset entries {0=default, not used}",
-    false,
-    0,
-    "Number of dataset entries to skip",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_lidarLabel{
-    "",
-    "lidar-sensor-label",
-    "If provided, this supersedes the values in the 'lidar_sensor_labels' "
-    "entry of the odometry pipeline, defining the sensorLabel/topic name to "
-    "read LIDAR data from. It can be a regular expression {std::regex}",
-    false,
-    "lidar1",
-    "lidar1",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_imuLabel{
-    "",
-    "imu-sensor-label",
-    "If provided, this supersedes the values in the 'imu_sensor_label' "
-    "entry of the odometry pipeline, defining the sensorLabel/topic name to "
-    "read IMU data from. It can be a regular expression {std::regex}",
-    false,
-    "imu",
-    "imu",
-    cmd};
-
-  TCLAP::ValueArg<std::string> arg_baseLinkName{
-    "",
-    "base-link-frame-id",
-    "Only for rosbag input sources. This defines the /tf frame_id used as"
-    "reference frame for the vehicle or robot. It is used to get sensors poses with respect to the "
-    "vehicle from /tf data.",
-    false,
-    "base_link",
-    "base_link",
-    cmd};
-
-// Input dataset can come from one of these:
-// --------------------------------------------
 #if defined(HAVE_MOLA_INPUT_RAWLOG)
-  TCLAP::ValueArg<std::string> argRawlog{
-    "",    "input-rawlog",   "INPUT DATASET: rawlog. Input dataset in rawlog format {*.rawlog}",
-    false, "dataset.rawlog", "dataset.rawlog",
-    cmd};
+  std::string argRawlog;
 #endif
-
 #if defined(HAVE_MOLA_INPUT_ROSBAG2)
-  TCLAP::ValueArg<std::string> argRosbag2{
-    "",    "input-rosbag2", "INPUT DATASET: rosbag2. Input dataset in rosbag2 format {*.mcap}",
-    false, "dataset.mcap",  "dataset.mcap",
-    cmd};
+  std::string argRosbag2;
 #endif
 
+  void setup()
+  {
+    app.add_option("-c,--config", argYAML, "Input pipeline YAML config file (required) (*.yml)")->required();
+    app.add_option("-v,--verbosity", arg_verbosity_level, "Verbosity level: ERROR|WARN|INFO|DEBUG {Default: INFO}");
+    app.add_option("-l,--load-plugins", arg_plugins, "One or more {comma separated} *.so files to load as plugins");
+    app.add_option("--state-estimator", arg_stateEstimatorClass, "The C++ class name of the state estimator to use");
+    app.add_option("--state-estimator-param-file", arg_stateEstimatorParams, "Path to YAML parameters file to configure the state estimator.");
+    app.add_option("--output-twist", arg_outTwist, "Save the estimated twist as a TXT file");
+    app.add_option("--output-simplemap", arg_outSimpleMap, "Enables building and saving the simplemap for the mapping session");
+    app.add_option("--only-first-n", arg_firstN, "Run for the first N steps only {0=default, not used}");
+    app.add_option("--skip-first-n", arg_skipFirstN, "Skip the first N dataset entries {0=default, not used}");
+    app.add_option("--lidar-sensor-label", arg_lidarLabel, "Supersedes lidar_sensor_labels in the pipeline; sensor label/topic name for LIDAR data");
+    app.add_option("--imu-sensor-label", arg_imuLabel, "Supersedes imu_sensor_label in the pipeline; sensor label/topic name for IMU data");
+    app.add_option("--base-link-frame-id", arg_baseLinkName, "Only for rosbag input: /tf frame_id used as reference frame for the vehicle");
+
+#if defined(HAVE_MOLA_INPUT_RAWLOG)
+    app.add_option("--input-rawlog", argRawlog, "INPUT DATASET: rawlog. Input dataset in rawlog format {*.rawlog}");
+#endif
+#if defined(HAVE_MOLA_INPUT_ROSBAG2)
+    app.add_option("--input-rosbag2", argRosbag2, "INPUT DATASET: rosbag2. Input dataset in rosbag2 format {*.mcap}");
+#endif
+  }
 };  // end struct "Cli"
 
 namespace
@@ -223,7 +140,7 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag2(
   Cli & cli, const std::string & rosbag2file, const mrpt::system::VerbosityLevel logLevel)
 {
   ASSERTMSG_(
-    cli.arg_lidarLabel.isSet(),
+    !cli.arg_lidarLabel.empty(),
     "Using a rosbag2 as input requires telling what is the lidar topic "
     "with --lidar-sensor-label <TOPIC_NAME>");
 
@@ -254,8 +171,8 @@ std::shared_ptr<mola::OfflineDatasetSource> dataset_from_rosbag2(
           fixed_sensor_pose: "${IMU_POSE_X|0} ${IMU_POSE_Y|0} ${IMU_POSE_Z|0} ${IMU_POSE_YAW|0} ${IMU_POSE_PITCH|0} ${IMU_POSE_ROLL|0}" # 'x y z yaw_deg pitch_deg roll_deg''
           use_fixed_sensor_pose: ${MOLA_USE_FIXED_IMU_POSE|false}
 )"""",
-        rosbag2file.c_str(), cli.arg_baseLinkName.getValue().c_str(),
-        cli.arg_lidarLabel.getValue().c_str(), cli.arg_imuLabel.getValue().c_str())));
+        rosbag2file.c_str(), cli.arg_baseLinkName.c_str(),
+        cli.arg_lidarLabel.c_str(), cli.arg_imuLabel.c_str())));
 
   o->initialize(cfg);
 
@@ -293,8 +210,8 @@ int main_odometry(Cli & cli)  // NOLINT
   // Declare state estimator module:
   // ------------------------------------------
   mola::NavStateFilter::Ptr stateEstimator;
-  if (cli.arg_stateEstimatorClass.isSet()) {
-    const auto sClass = cli.arg_stateEstimatorClass.getValue();
+  if (!cli.arg_stateEstimatorClass.empty()) {
+    const auto sClass = cli.arg_stateEstimatorClass;
     auto o = mrpt::rtti::classFactory(sClass);
     ASSERTMSG_(
       o, mrpt::format(
@@ -328,8 +245,8 @@ int main_odometry(Cli & cli)  // NOLINT
                  "raw sensor data.\n";
   }
 
-  if (cli.arg_stateEstimatorParams.isSet()) {
-    const auto seParamsFile = cli.arg_stateEstimatorParams.getValue();
+  if (!cli.arg_stateEstimatorParams.empty()) {
+    const auto seParamsFile = cli.arg_stateEstimatorParams;
     auto seParams = mrpt::containers::yaml::FromFile(seParamsFile);
     stateEstimator->initialize(mola::parse_yaml(seParams));
   }
@@ -340,9 +257,9 @@ int main_odometry(Cli & cli)  // NOLINT
 
   // Logging level:
   mrpt::system::VerbosityLevel logLevel = mapper->getMinLoggingLevel();
-  if (cli.arg_verbosity_level.isSet()) {
+  if (!cli.arg_verbosity_level.empty()) {
     using vl = mrpt::typemeta::TEnumType<mrpt::system::VerbosityLevel>;
-    logLevel = vl::name2value(cli.arg_verbosity_level.getValue());
+    logLevel = vl::name2value(cli.arg_verbosity_level);
     mapper->setVerbosityLevel(logLevel);
     stateEstimator->setVerbosityLevel(logLevel);
   }
@@ -374,57 +291,23 @@ int main_odometry(Cli & cli)  // NOLINT
       mark_emitted_log();
     });
 
-  // Initialize LiDAR Odometry:
-  const auto file_yml = cli.argYAML.getValue();
+  // Initialize mapper:
+  const auto file_yml = cli.argYAML;
   const auto cfg = mola::load_yaml_file(file_yml);
 
-  // Enable time profiling: // can be enabled via YAML options
-  // liodom->profiler_.enable();
-
-  // liodom->initialize_common(cfg); // can be skipped for a non-MOLA system
   mapper->initialize(cfg);
-
-#if 0
-  if (cli.arg_lidarLabel.isSet()) {
-    liodom->params_.lidar_sensor_labels.assign(1, std::regex(cli.arg_lidarLabel.getValue()));
-  }
-
-  if (cli.arg_imuLabel.isSet()) {
-    liodom->params_.imu_sensor_label = std::regex(cli.arg_imuLabel.getValue());
-  }
-#endif
 
   // Select dataset input:
   std::shared_ptr<mola::OfflineDatasetSource> dataset;
 
 #if defined(HAVE_MOLA_INPUT_RAWLOG)
-  if (cli.argRawlog.isSet()) {
-    dataset = dataset_from_rawlog(cli.argRawlog.getValue(), logLevel);
-  } else
-#endif
-#if defined(HAVE_MOLA_INPUT_KITTI)
-    if (cli.argKittiSeq.isSet()) {
-    dataset = dataset_from_kitti(cli, cli.argKittiSeq.getValue(), logLevel);
-  } else
-#endif
-#if defined(HAVE_MOLA_INPUT_KITTI360)
-    if (cli.argKitti360Seq.isSet()) {
-    dataset = dataset_from_kitti360(cli.argKitti360Seq.getValue(), logLevel);
-  } else
-#endif
-#if defined(HAVE_MOLA_INPUT_MULRAN)
-    if (cli.argMulranSeq.isSet()) {
-    dataset = dataset_from_mulran(cli.argMulranSeq.getValue(), logLevel);
+  if (!cli.argRawlog.empty()) {
+    dataset = dataset_from_rawlog(cli.argRawlog, logLevel);
   } else
 #endif
 #if defined(HAVE_MOLA_INPUT_ROSBAG2)
-    if (cli.argRosbag2.isSet()) {
-    dataset = dataset_from_rosbag2(cli, cli.argRosbag2.getValue(), logLevel);
-  } else
-#endif
-#if defined(HAVE_MOLA_INPUT_PARIS_LUCO)
-    if (cli.argParisLucoSeq.isSet()) {
-    dataset = dataset_from_paris_luco(logLevel);
+  if (!cli.argRosbag2.empty()) {
+    dataset = dataset_from_rosbag2(cli, cli.argRosbag2, logLevel);
   } else
 #endif
   {
@@ -436,7 +319,7 @@ int main_odometry(Cli & cli)  // NOLINT
 
   // Optional output twist:
   std::optional<mrpt::poses::CPose3DInterpolator> outTwist;
-  if (cli.arg_outTwist.isSet()) {
+  if (!cli.arg_outTwist.empty()) {
     outTwist.emplace();
   }
 
@@ -445,12 +328,12 @@ int main_odometry(Cli & cli)  // NOLINT
   size_t lastDatasetEntry = dataset->datasetSize();
   size_t firstDatasetEntry = 0;
 
-  if (cli.arg_skipFirstN.isSet()) {
-    firstDatasetEntry = cli.arg_skipFirstN.getValue();
+  if (cli.arg_skipFirstN > 0) {
+    firstDatasetEntry = cli.arg_skipFirstN;
   }
 
-  if (cli.arg_firstN.isSet()) {
-    lastDatasetEntry = firstDatasetEntry + cli.arg_firstN.getValue();
+  if (cli.arg_firstN > 0) {
+    lastDatasetEntry = firstDatasetEntry + cli.arg_firstN;
   }
 
   mrpt::keep_min(lastDatasetEntry, dataset->datasetSize());
@@ -523,31 +406,10 @@ int main_odometry(Cli & cli)  // NOLINT
                      lastPose.asString().c_str());
       std::cout.flush();
     }
-
-#if 0  // Keep track of vehicle velocities?
-    if (outTwist) {
-      if (const auto optPoseAndTwist = mapper->lastEstimatedState(); optPoseAndTwist) {
-        const auto & [pose, tw] = optPoseAndTwist.value();
-        outTwist->insert(
-          obs->timestamp, mrpt::math::TPose3D(tw.vx, tw.vy, tw.vz, tw.wz, tw.wy, tw.wx));
-      }
-    }
-#endif
   }
 
-#if 0
-  if (cli.arg_outPath.isSet()) {
-    const auto fil = cli.arg_outPath.getValue();
-    std::cout << "\nSaving estimated path in TUM format to: " << fil
-              << std::endl;  // NOLINT(performance-avoid-endl)
-
-    const mrpt::poses::CPose3DInterpolator lastEstimatedTrajectory = liodom->estimatedTrajectory();
-    lastEstimatedTrajectory.saveToTextFile_TUM(fil);
-  }
-#endif
-
-  if (cli.arg_outSimpleMap.isSet()) {
-    const auto fil = cli.arg_outSimpleMap.getValue();
+  if (!cli.arg_outSimpleMap.empty()) {
+    const auto fil = cli.arg_outSimpleMap;
 
     auto sm = mapper->get_current_map();
 
@@ -558,7 +420,7 @@ int main_odometry(Cli & cli)  // NOLINT
   }
 
   if (outTwist) {
-    const auto fil = cli.arg_outTwist.getValue();
+    const auto fil = cli.arg_outTwist;
     std::cout << "\nSaving estimated twist to: " << fil
               << std::endl;  // NOLINT(performance-avoid-endl)
     outTwist->saveToTextFile(fil);
@@ -572,16 +434,15 @@ int main(int argc, char ** argv)
 {
   try {
     Cli cli;
+    cli.setup();
 
     // Parse arguments:
-    if (!cli.cmd.parse(argc, argv)) {
-      return 1;  // should exit.
-    }
+    CLI11_PARSE(cli.app, argc, argv);
 
     // Load plugins:
-    if (cli.arg_plugins.isSet()) {
+    if (!cli.arg_plugins.empty()) {
       std::string errMsg;
-      const auto plugins = cli.arg_plugins.getValue();
+      const auto plugins = cli.arg_plugins;
       std::cout << "Loading plugin(s): " << plugins << "\n";
       if (!mrpt::system::loadPluginModules(plugins, errMsg)) {
         std::cerr << errMsg << std::endl;  // NOLINT(performance-avoid-endl)
