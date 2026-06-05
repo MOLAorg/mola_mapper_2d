@@ -34,6 +34,7 @@
 #include <mrpt/obs/CSensoryFrame.h>
 #include <mrpt/viz/CPointCloudColoured.h>
 #include <mrpt/viz/CSetOfLines.h>
+#include <mrpt/viz/CSetOfObjects.h>
 #include <mrpt/poses/CPose2D.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/CPosePDFGaussian.h>

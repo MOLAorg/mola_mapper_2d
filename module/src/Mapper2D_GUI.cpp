@@ -19,7 +19,7 @@
 #include <mola_mapper_2d/Mapper2D.h>
 #include <mrpt/gui/CDisplayWindowGUI.h>
 #include <mrpt/viz/CGridPlaneXY.h>
-#include <mrpt/viz/COpenGLScene.h>
+#include <mrpt/viz/Scene.h>
 #include <mrpt/viz/CPointCloudColoured.h>
 #include <mrpt/viz/stock_objects.h>
 

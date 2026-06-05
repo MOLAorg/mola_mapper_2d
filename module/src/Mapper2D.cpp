@@ -31,7 +31,7 @@
 #include <mrpt/obs/CObservation3DRangeScan.h>
 #include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/viz/CGridPlaneXY.h>
-#include <mrpt/viz/COpenGLScene.h>
+#include <mrpt/viz/Scene.h>
 #include <mrpt/viz/CSetOfLines.h>
 #include <mrpt/viz/stock_objects.h>
 #include <mrpt/poses/gtsam_wrappers.h>
@@ -296,7 +296,7 @@ void Mapper2D::initialize_frontend(const mola::Yaml & cfg)
 
   // Load visualization parameters
   if (cfg.has("visualization")) {
-    viz_params_ = cfg["visualization"];
+    viz_params_ = mrpt::containers::yaml(cfg["visualization"]);
   }
 
   sensor_labels_for_simplemap_ = cfg["sensor_labels_for_simplemap"].toStdVector<std::string>();
@@ -663,7 +663,7 @@ void Mapper2D::insert_new_keyframe_and_odometry_edge(
     auto & sf = mapper_state_.keyframe_observations[kf_id];
     for (const auto & label : sensor_labels_for_simplemap_) {
       if (auto obs = observations.getObservationBySensorLabel(label); obs) {
-        sf.insert(obs);
+        sf.insert(std::const_pointer_cast<mrpt::obs::CObservation>(obs));
       }
     }
   }
@@ -1011,7 +1011,7 @@ mrpt::viz::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 
 void Mapper2D::save_state_to_3d_scene(const std::string & filename) const
 {
-  mrpt::viz::COpenGLScene scene;
+  mrpt::viz::Scene scene;
   scene.insert(build_visualization());
   scene.saveToFile(filename);
 }

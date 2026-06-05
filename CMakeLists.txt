@@ -21,7 +21,9 @@ project(mola_mapper_2d LANGUAGES CXX)
 find_package(mola_common REQUIRED)
 
 # find dependencies:
+find_package(mrpt_gui REQUIRED)
 find_package(mrpt_maps REQUIRED)
+find_package(mrpt_viz REQUIRED)
 find_package(CLI11 REQUIRED)
 find_package(mola_kernel REQUIRED)
 find_package(mola_yaml REQUIRED)
@@ -48,7 +50,9 @@ mola_add_library(
   SOURCES ${LIB_SOURCES} ${LIB_PUBLIC_HEADERS}
   PUBLIC_LINK_LIBRARIES
     gtsam
+    mrpt::mrpt_gui
     mrpt::mrpt_maps
+    mrpt::mrpt_viz
     mola::mola_kernel
     mola::mola_yaml
     mola::mp2p_icp
