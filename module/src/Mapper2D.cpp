@@ -30,10 +30,10 @@
 #include <mrpt/obs/CObservation2DRangeScan.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
 #include <mrpt/obs/CObservationOdometry.h>
-#include <mrpt/opengl/CGridPlaneXY.h>
-#include <mrpt/opengl/COpenGLScene.h>
-#include <mrpt/opengl/CSetOfLines.h>
-#include <mrpt/opengl/stock_objects.h>
+#include <mrpt/viz/CGridPlaneXY.h>
+#include <mrpt/viz/COpenGLScene.h>
+#include <mrpt/viz/CSetOfLines.h>
+#include <mrpt/viz/stock_objects.h>
 #include <mrpt/poses/gtsam_wrappers.h>
 #include <mrpt/serialization/bimap_serialization.h>
 #include <mrpt/serialization/stl_serialization.h>
@@ -922,17 +922,17 @@ void Mapper2D::optimize_pose_graph()
   mapper_state_.gtsam_data.graph_values = optimal_values;
 }
 
-mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
+mrpt::viz::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 {
   using namespace std::string_literals;
 
   auto lck = mrpt::lockHelper(state_mtx_);
 
-  auto gl_map = mrpt::opengl::CSetOfObjects::Create();
+  auto gl_map = mrpt::viz::CSetOfObjects::Create();
 
   // Pose graph visualization
-  auto gl_pose_graph = mrpt::opengl::CSetOfObjects::Create();
-  auto gl_edges = mrpt::opengl::CSetOfLines::Create();
+  auto gl_pose_graph = mrpt::viz::CSetOfObjects::Create();
+  auto gl_edges = mrpt::viz::CSetOfLines::Create();
   gl_pose_graph->insert(gl_edges);
   gl_edges->setColor_u8(0x00, 0x00, 0xff, 0x60);
 
@@ -941,7 +941,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
     const auto key = kv.key;
     const auto pose = mrpt::gtsam_wrappers::toTPose3D(kv.value.cast<gtsam::Pose3>());
 
-    auto gl_corner = mrpt::opengl::stock_objects::CornerXYZSimple(0.20f);
+    auto gl_corner = mrpt::viz::stock_objects::CornerXYZSimple(0.20f);
     gl_corner->setPose(pose);
     gl_corner->setName("KF#"s + std::to_string(gtsam::Symbol(key).index()));
 
@@ -993,13 +993,13 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 
   // Localization poses
   {
-    auto gl_loc_pose = mrpt::opengl::stock_objects::CornerXYZ(1.5f);
+    auto gl_loc_pose = mrpt::viz::stock_objects::CornerXYZ(1.5f);
     gl_loc_pose->setPose(mapper_state_.last_localization);
     gl_map->insert(gl_loc_pose);
   }
 
   {
-    auto gl_cur_pose = mrpt::opengl::stock_objects::CornerXYZ(2.0f);
+    auto gl_cur_pose = mrpt::viz::stock_objects::CornerXYZ(2.0f);
     gl_cur_pose->setPose(
       mapper_state_.last_localization +
       mapper_state_.accum_odom_since_last_localization.getPoseMean());
@@ -1011,7 +1011,7 @@ mrpt::opengl::CSetOfObjects::Ptr Mapper2D::build_visualization() const
 
 void Mapper2D::save_state_to_3d_scene(const std::string & filename) const
 {
-  mrpt::opengl::COpenGLScene scene;
+  mrpt::viz::COpenGLScene scene;
   scene.insert(build_visualization());
   scene.saveToFile(filename);
 }

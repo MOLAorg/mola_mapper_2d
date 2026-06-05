@@ -18,10 +18,10 @@
 
 #include <mola_mapper_2d/Mapper2D.h>
 #include <mrpt/gui/CDisplayWindowGUI.h>
-#include <mrpt/opengl/CGridPlaneXY.h>
-#include <mrpt/opengl/COpenGLScene.h>
-#include <mrpt/opengl/CPointCloudColoured.h>
-#include <mrpt/opengl/stock_objects.h>
+#include <mrpt/viz/CGridPlaneXY.h>
+#include <mrpt/viz/COpenGLScene.h>
+#include <mrpt/viz/CPointCloudColoured.h>
+#include <mrpt/viz/stock_objects.h>
 
 // GTSAM:
 #include <gtsam/geometry/Pose3.h>
@@ -128,7 +128,7 @@ void Mapper2D::updateVisualization()
 
 void Mapper2D::updateVisualizationInitVehFrame()
 {
-  gl_vehicle_frame_ = mrpt::opengl::CSetOfObjects::Create();
+  gl_vehicle_frame_ = mrpt::viz::CSetOfObjects::Create();
 
   // Add coordinate frame corner
   double cornerSize = 1.0;
@@ -137,7 +137,7 @@ void Mapper2D::updateVisualizationInitVehFrame()
   }
 
   if (cornerSize > 0) {
-    auto glCorner = mrpt::opengl::stock_objects::CornerXYZ(static_cast<float>(cornerSize));
+    auto glCorner = mrpt::viz::stock_objects::CornerXYZ(static_cast<float>(cornerSize));
     gl_vehicle_frame_->insert(glCorner);
   }
 }
@@ -156,9 +156,9 @@ void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & upda
   }
 
   if (!gl_estimated_path_) {
-    gl_estimated_path_ = mrpt::opengl::CSetOfLines::Create();
+    gl_estimated_path_ = mrpt::viz::CSetOfLines::Create();
     gl_estimated_path_->setColor_u8(0x00, 0xff, 0x00, 0xff);  // Green
-    gl_path_group_ = mrpt::opengl::CSetOfObjects::Create();
+    gl_path_group_ = mrpt::viz::CSetOfObjects::Create();
   }
 
   // Build path from keyframe poses
@@ -190,7 +190,7 @@ void Mapper2D::updateVisualizationPath(std::vector<std::function<void()>> & upda
   }
 
   gl_path_group_->clear();
-  gl_path_group_->insert(mrpt::opengl::CSetOfLines::Create(*gl_estimated_path_));
+  gl_path_group_->insert(mrpt::viz::CSetOfLines::Create(*gl_estimated_path_));
 
   update_tasks.emplace_back(
     [this]() { visualizer_->update_3d_object("mapper2d/path", gl_path_group_); });
@@ -222,7 +222,7 @@ void Mapper2D::updateVisualizationLocalMap(std::vector<std::function<void()>> & 
   local_map_needs_viz_update_ = false;
 
   // Build combined point cloud from nearby keyframes
-  auto glMap = mrpt::opengl::CSetOfObjects::Create();
+  auto glMap = mrpt::viz::CSetOfObjects::Create();
 
   float pointSize = 3.0f;
   if (viz_params_.has("local_map_point_size")) {

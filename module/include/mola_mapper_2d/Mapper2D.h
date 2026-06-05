@@ -32,8 +32,8 @@
 #include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationOdometry.h>
 #include <mrpt/obs/CSensoryFrame.h>
-#include <mrpt/opengl/CPointCloudColoured.h>
-#include <mrpt/opengl/CSetOfLines.h>
+#include <mrpt/viz/CPointCloudColoured.h>
+#include <mrpt/viz/CSetOfLines.h>
 #include <mrpt/poses/CPose2D.h>
 #include <mrpt/poses/CPose3D.h>
 #include <mrpt/poses/CPosePDFGaussian.h>
@@ -392,7 +392,7 @@ private:
 
   void save_state_to_3d_scene(const std::string & filename) const;
 
-  mrpt::opengl::CSetOfObjects::Ptr build_visualization() const;
+  mrpt::viz::CSetOfObjects::Ptr build_visualization() const;
 
   void internal_delete_keyframe(KeyFrameID kf_id);
 
@@ -457,7 +457,7 @@ private:
   std::vector<std::string> sensor_labels_for_simplemap_;
 
   // Visualization cache
-  mutable std::map<KeyFrameID, mrpt::opengl::CSetOfObjects::Ptr> cached_viz_point_clouds_;
+  mutable std::map<KeyFrameID, mrpt::viz::CSetOfObjects::Ptr> cached_viz_point_clouds_;
 
   // ===== Worker thread pool =====
   mrpt::WorkerThreadsPool worker_lidar_{
@@ -490,9 +490,9 @@ private:
   mutable std::mutex state_gui_mtx_;
 
   // Visualization state
-  mrpt::opengl::CSetOfObjects::Ptr gl_vehicle_frame_;
-  mrpt::opengl::CSetOfObjects::Ptr gl_path_group_;
-  mrpt::opengl::CSetOfLines::Ptr gl_estimated_path_;
+  mrpt::viz::CSetOfObjects::Ptr gl_vehicle_frame_;
+  mrpt::viz::CSetOfObjects::Ptr gl_path_group_;
+  mrpt::viz::CSetOfLines::Ptr gl_estimated_path_;
   int map_update_counter_ = std::numeric_limits<int>::max();
   bool local_map_needs_viz_update_ = true;
   std::optional<double> last_yaw_for_viz_camera_;
